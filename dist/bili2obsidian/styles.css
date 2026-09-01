@@ -26,6 +26,25 @@
   margin-top: 12px;
 }
 
+/* 收藏夹选择弹窗 */
+.bili2obsidian-folder-list {
+  max-height: 50vh;
+  overflow-y: auto;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  padding: 8px 12px;
+  margin-top: 8px;
+}
+.bili2obsidian-folder-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
+}
+.bili2obsidian-folder-row input[type="checkbox"] {
+  margin: 0;
+}
+
 /* 版本状态区 */
 .bili2obsidian-version {
   border: 1px solid var(--background-modifier-border);
