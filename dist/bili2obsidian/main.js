@@ -61,8 +61,6 @@ const DEFAULT_SETTINGS = {
   licenseValid: false,   // 授权码校验结果缓存
   syncedCount: 0,        // 已同步笔记数（免费版额度计数）
   fetchSubtitle: false,  // 逐字稿同步（永久版功能）
-  folderWhitelist: [],   // 收藏夹白名单（收藏夹 id 数组；空 = 同步全部）
-  biliUname: '',         // 缓存的 B 站用户名（登录状态展示用）
 };
 
 /** 休眠工具：实现请求间隔 */
@@ -132,81 +130,6 @@ class LoginModal extends Modal {
     } catch (e) {
       console.error('[bili2obsidian] 提取 Cookie 失败', e);
       new Notice('提取 Cookie 失败：' + e.message);
-    }
-  }
-
-  onClose() {
-    this.contentEl.empty();
-  }
-}
-
-/* ------------------------------------------------------------------ */
-/* 收藏夹白名单选择弹窗                                                  */
-/* ------------------------------------------------------------------ */
-class FolderPickModal extends Modal {
-  constructor(app, plugin, onDone) {
-    super(app);
-    this.plugin = plugin;
-    this.onDone = onDone;
-  }
-
-  async onOpen() {
-    const { contentEl } = this;
-    contentEl.empty();
-    contentEl.createEl('h3', { text: '选择要同步的收藏夹' });
-    contentEl.createEl('p', {
-      text: '都不勾选 = 同步全部。勾选后只同步选中的收藏夹。',
-      cls: 'bili2obsidian-tip',
-    });
-    const listEl = contentEl.createDiv({ cls: 'bili2obsidian-folder-list' });
-    listEl.setText('加载中…');
-
-    // 拉登录态 + 收藏夹列表
-    try {
-      if (!this.plugin.settings.sessdata) {
-        listEl.setText('请先登录 B 站（设置页 → 登录 B 站）');
-        return;
-      }
-      const nav = await this.plugin.biliApi('https://api.bilibili.com/x/web-interface/nav');
-      if (nav.code !== 0 || !nav.data || !nav.data.isLogin) {
-        listEl.setText('登录态无效，请重新登录');
-        return;
-      }
-      this.plugin.settings.biliUname = nav.data.uname || '';
-      const folders = await this.plugin.biliApi(
-        `https://api.bilibili.com/x/v3/fav/folder/created/list-all?up_mid=${nav.data.mid}`
-      );
-      const list = (folders.data && folders.data.list) || [];
-      listEl.empty();
-      if (!list.length) { listEl.setText('没有收藏夹'); return; }
-
-      const wl = this.plugin.settings.folderWhitelist || [];
-      for (const f of list) {
-        const row = listEl.createDiv({ cls: 'bili2obsidian-folder-row' });
-        const cb = row.createEl('input', { type: 'checkbox' });
-        cb.checked = wl.length === 0 ? true : wl.includes(f.id); // 未配置时视觉全选
-        row.createEl('span', { text: `${f.title}（${f.media_count} 条）` });
-        cb.onchange = () => {
-          let cur = this.plugin.settings.folderWhitelist || [];
-          // 从「全选状态」第一次操作时：先固化为全部 id 再增删
-          if (cur.length === 0) cur = list.map((x) => x.id);
-          if (cb.checked) { if (!cur.includes(f.id)) cur.push(f.id); }
-          else { cur = cur.filter((x) => x !== f.id); }
-          // 全部勾选 = 回到「不限制」
-          this.plugin.settings.folderWhitelist = cur.length === list.length ? [] : cur;
-        };
-      }
-      const btnRow = contentEl.createDiv({ cls: 'bili2obsidian-btn-row' });
-      const saveBtn = btnRow.createEl('button', { text: '保存' });
-      saveBtn.addClass('mod-cta');
-      saveBtn.onclick = async () => {
-        await this.plugin.saveSettings();
-        new Notice('收藏夹选择已保存');
-        this.close();
-        if (this.onDone) this.onDone();
-      };
-    } catch (e) {
-      listEl.setText('加载失败：' + e.message);
     }
   }
 
@@ -311,7 +234,6 @@ class Bili2ObsidianPlugin extends Plugin {
         return;
       }
       const mid = nav.data.mid;
-      this.settings.biliUname = nav.data.uname || '';
       new Notice(`已登录：${nav.data.uname}，开始同步收藏夹…`);
 
       // 2) 拉取收藏夹列表
@@ -323,10 +245,7 @@ class Bili2ObsidianPlugin extends Plugin {
         new Notice('获取收藏夹列表失败：' + (folders.message || folders.code));
         return;
       }
-      let list = (folders.data && folders.data.list) || [];
-      // 收藏夹白名单：非空时只同步选中的
-      const wl = this.settings.folderWhitelist || [];
-      if (wl.length) list = list.filter((f) => wl.includes(f.id));
+      const list = (folders.data && folders.data.list) || [];
       let created = 0, skipped = 0;
 
       // 3) 逐收藏夹同步
@@ -589,11 +508,6 @@ class Bili2ObsidianSettingTab extends PluginSettingTab {
       )
       .addButton((btn) =>
         btn
-          .setButtonText('购买授权码')
-          .onClick(() => window.open('https://product.aiprice.store/bili#buy'))
-      )
-      .addButton((btn) =>
-        btn
           .setButtonText('激活')
           .setCta()
           .onClick(async () => {
@@ -605,35 +519,10 @@ class Bili2ObsidianSettingTab extends PluginSettingTab {
           })
       );
 
-    // ===== B站登录状态 =====
-    const uname = this.plugin.settings.biliUname;
-    const hasCookie = !!this.plugin.settings.sessdata;
-    new Setting(containerEl)
-      .setName('B 站登录状态')
-      .setDesc(hasCookie ? (uname ? `已登录：${uname}` : '已保存 Cookie（点同步验证有效性）') : '未登录。点右侧按钮内嵌登录，自动提取登录态')
-      .addButton((btn) =>
-        btn
-          .setButtonText(hasCookie ? '重新登录' : '登录 B 站')
-          .setCta()
-          .onClick(() => new LoginModal(this.app, this.plugin).open())
-      )
-      .addButton((btn) =>
-        btn
-          .setButtonText('退出登录')
-          .setWarning()
-          .onClick(async () => {
-            this.plugin.settings.sessdata = '';
-            this.plugin.settings.biliUname = '';
-            await this.plugin.saveSettings();
-            new Notice('已退出登录');
-            this.display();
-          })
-      );
-
-    // SESSDATA 输入框（密码样式防偷窥，高级用户手动粘贴用）
+    // SESSDATA 输入框（密码样式防偷窥）
     new Setting(containerEl)
       .setName('SESSDATA Cookie')
-      .setDesc('一般不用管：上面的「登录 B 站」会自动填。也可手动粘贴。')
+      .setDesc('B 站登录凭证。可点右侧按钮内嵌登录后自动提取。')
       .addText((text) => {
         text
           .setPlaceholder('粘贴 SESSDATA')
@@ -643,17 +532,12 @@ class Bili2ObsidianSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           });
         text.inputEl.type = 'password';
-      });
-
-    // ===== 收藏夹白名单 =====
-    const wl = this.plugin.settings.folderWhitelist || [];
-    new Setting(containerEl)
-      .setName('同步收藏夹')
-      .setDesc(wl.length ? `已选 ${wl.length} 个收藏夹（只同步勾选的）` : '默认同步全部收藏夹；点右侧按钮可选择')
+      })
       .addButton((btn) =>
         btn
-          .setButtonText('选择收藏夹')
-          .onClick(() => new FolderPickModal(this.app, this.plugin, () => this.display()).open())
+          .setButtonText('内嵌登录提取')
+          .setCta()
+          .onClick(() => new LoginModal(this.app, this.plugin).open())
       );
 
     // 同步间隔（分钟）
