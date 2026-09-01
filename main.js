@@ -518,6 +518,24 @@ class Bili2ObsidianPlugin extends Plugin {
     }
   }
 
+  /** AI 接口探活：GET /models 验证地址 + key 可用性，返回 {ok, msg} */
+  async testAI() {
+    try {
+      const base = (this.settings.aiBaseUrl || '').replace(/\/+$/, '');
+      if (!base || !this.settings.aiKey) return { ok: false, msg: '请先填接口地址和 API Key' };
+      const resp = await requestUrl({
+        url: base + '/models',
+        headers: { Authorization: 'Bearer ' + this.settings.aiKey },
+      });
+      const list = resp.json && resp.json.data;
+      return Array.isArray(list)
+        ? { ok: true, msg: `连接成功，可用模型 ${list.length} 个` }
+        : { ok: true, msg: '连接成功（接口未返回模型列表，但鉴权通过）' };
+    } catch (e) {
+      return { ok: false, msg: '连接失败：' + (e.message || e) };
+    }
+  }
+
   /** 秒 → mm:ss */
   fmtTime(sec) {
     const s = Math.floor(sec || 0);
@@ -549,9 +567,15 @@ class Bili2ObsidianPlugin extends Plugin {
           max_tokens: 800,
         }),
       });
-      return resp.json && resp.json.choices && resp.json.choices[0]
-        ? resp.json.choices[0].message.content.trim()
+      const msg = resp.json && resp.json.choices && resp.json.choices[0]
+        ? resp.json.choices[0].message
         : null;
+      if (!msg) return null;
+      // 思考模式处理：reasoning_content 是思考过程，不进笔记；content 里残留的 <think> 块也剥掉
+      let text = (msg.content || '').trim();
+      if (!text) return null; // 只有思考过程没有正式回答 = 没拿到总结
+      text = text.replace(/<think>[\s\S]*?(<\/think>|$)/g, '').trim();
+      return text || null;
     } catch (e) {
       console.error('[bili2obsidian] AI 总结失败', e);
       return null;
@@ -805,7 +829,7 @@ class Bili2ObsidianSettingTab extends PluginSettingTab {
       });
     new Setting(containerEl)
       .setName('模型')
-      .setDesc('如 deepseek-chat / glm-5.3-flash / qwen-turbo')
+      .setDesc('如 deepseek-chat / glm-5.3-flash / qwen-turbo（别开思考模式的模型，思考过程不进笔记）')
       .addText((text) =>
         text
           .setPlaceholder('deepseek-chat')
@@ -814,6 +838,21 @@ class Bili2ObsidianSettingTab extends PluginSettingTab {
           .onChange(async (value) => {
             this.plugin.settings.aiModel = value.trim() || 'deepseek-chat';
             await this.plugin.saveSettings();
+          })
+      );
+    // 探活按钮
+    new Setting(containerEl)
+      .setName('连接测试')
+      .setDesc('验证接口地址 + Key 是否可用（探活后才建议开 AI 总结）')
+      .addButton((btn) =>
+        btn
+          .setButtonText('测试连接')
+          .setDisabled(!aiOn)
+          .onClick(async () => {
+            btn.setButtonText('测试中…').setDisabled(true);
+            const r = await this.plugin.testAI();
+            new Notice(r.ok ? '✅ ' + r.msg : '❌ ' + r.msg);
+            btn.setButtonText('测试连接').setDisabled(!aiOn);
           })
       );
 
