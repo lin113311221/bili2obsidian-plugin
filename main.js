@@ -29,7 +29,7 @@ const REQUEST_INTERVAL_MS = 300;
 /** 收藏夹内容分页大小（B 站接口上限 40） */
 const PAGE_SIZE = 40;
 /** 免费版额度：累计最多同步 50 条视频笔记 */
-const FREE_QUOTA = 50;
+const FREE_QUOTA = 20;
 /** 授权码签名密钥（离线校验用；买断制单机授权，与分发码生成器配对） */
 const LICENSE_SECRET = 'bili2obsidian::v1::aiprice';
 
@@ -63,6 +63,10 @@ const DEFAULT_SETTINGS = {
   fetchSubtitle: false,  // 逐字稿同步（永久版功能）
   folderWhitelist: [],   // 收藏夹白名单（收藏夹 id 数组；空 = 同步全部）
   biliUname: '',         // 缓存的 B 站用户名（登录状态展示用）
+  aiSummary: false,      // AI 总结（永久版功能，依赖逐字稿）
+  aiBaseUrl: 'https://api.deepseek.com', // OpenAI 兼容接口地址
+  aiKey: '',             // 用户自备模型 key（BYOK）
+  aiModel: 'deepseek-chat', // 模型名
 };
 
 /** 休眠工具：实现请求间隔 */
@@ -442,10 +446,16 @@ class Bili2ObsidianPlugin extends Plugin {
 
     // 逐字稿（永久版功能）：view 接口拿 cid → player/v2 拿字幕 → 拼接正文
     let subtitleSection = '';
+    let aiSection = '';
     if (this.settings.licenseValid && this.settings.fetchSubtitle) {
       const sub = await this.fetchSubtitle(media.bvid);
       if (sub) {
         subtitleSection = ['', '## 逐字稿', '', sub, ''].join('\n');
+        // AI 总结（永久版，BYOK）：有逐字稿才有意义
+        if (this.settings.aiSummary && this.settings.aiKey) {
+          const summary = await this.callAI(media.title, sub);
+          if (summary) aiSection = ['', '## AI 总结', '', summary, ''].join('\n');
+        }
       }
     }
 
@@ -468,6 +478,7 @@ class Bili2ObsidianPlugin extends Plugin {
       `![cover](${coverRef})`,
       '',
       media.intro || '',
+      aiSection,
       subtitleSection,
       `[B 站原文链接](https://www.bilibili.com/video/${media.bvid})`,
       '',
@@ -511,6 +522,40 @@ class Bili2ObsidianPlugin extends Plugin {
   fmtTime(sec) {
     const s = Math.floor(sec || 0);
     return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+  }
+
+  /**
+   * AI 总结（永久版，BYOK）：调 OpenAI 兼容接口
+   * 逐字稿截断到 8000 字符控制 token 消耗；失败返回 null（不阻塞笔记写入）
+   */
+  async callAI(title, subtitle) {
+    try {
+      const base = (this.settings.aiBaseUrl || '').replace(/\/+$/, '');
+      const resp = await requestUrl({
+        url: base + '/chat/completions',
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer ' + this.settings.aiKey,
+        },
+        body: JSON.stringify({
+          model: this.settings.aiModel || 'deepseek-chat',
+          messages: [
+            {
+              role: 'user',
+              content: `请用中文总结这个视频的逐字稿（标题：${title}）。输出三段：「核心观点」2-3 句；「要点」3-6 条列表；「金句」摘录 1-3 句原文。逐字稿：\n${subtitle.slice(0, 8000)}`,
+            },
+          ],
+          max_tokens: 800,
+        }),
+      });
+      return resp.json && resp.json.choices && resp.json.choices[0]
+        ? resp.json.choices[0].message.content.trim()
+        : null;
+    } catch (e) {
+      console.error('[bili2obsidian] AI 总结失败', e);
+      return null;
+    }
   }
 
   /** 下载封面到本地，成功返回相对路径（供 Markdown 引用），失败返回 null */
@@ -712,6 +757,62 @@ class Bili2ObsidianSettingTab extends PluginSettingTab {
           .setDisabled(!this.plugin.settings.licenseValid)
           .onChange(async (value) => {
             this.plugin.settings.fetchSubtitle = value;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    // ===== AI 总结（永久版，BYOK OpenAI 兼容接口） =====
+    containerEl.createEl('h3', { text: 'AI 总结（永久版）' });
+    const aiOn = this.plugin.settings.licenseValid;
+    new Setting(containerEl)
+      .setName('启用 AI 总结')
+      .setDesc(aiOn ? '有逐字稿时自动生成「核心观点 / 要点 / 金句」' : '永久版功能，激活后可用')
+      .addToggle((toggle) =>
+        toggle
+          .setValue(aiOn && this.plugin.settings.aiSummary)
+          .setDisabled(!aiOn)
+          .onChange(async (value) => {
+            this.plugin.settings.aiSummary = value;
+            await this.plugin.saveSettings();
+          })
+      );
+    new Setting(containerEl)
+      .setName('接口地址')
+      .setDesc('OpenAI 兼容接口。不知道选哪家？去 product.aiprice.store/ask 比价挑最便宜的')
+      .addText((text) =>
+        text
+          .setPlaceholder('https://api.deepseek.com')
+          .setValue(this.plugin.settings.aiBaseUrl)
+          .setDisabled(!aiOn)
+          .onChange(async (value) => {
+            this.plugin.settings.aiBaseUrl = value.trim();
+            await this.plugin.saveSettings();
+          })
+      );
+    new Setting(containerEl)
+      .setName('API Key')
+      .setDesc('你自己账号的 key，插件只存在本地 vault，不上传')
+      .addText((text) => {
+        text
+          .setPlaceholder('sk-...')
+          .setValue(this.plugin.settings.aiKey)
+          .setDisabled(!aiOn)
+          .onChange(async (value) => {
+            this.plugin.settings.aiKey = value.trim();
+            await this.plugin.saveSettings();
+          });
+        text.inputEl.type = 'password';
+      });
+    new Setting(containerEl)
+      .setName('模型')
+      .setDesc('如 deepseek-chat / glm-5.3-flash / qwen-turbo')
+      .addText((text) =>
+        text
+          .setPlaceholder('deepseek-chat')
+          .setValue(this.plugin.settings.aiModel)
+          .setDisabled(!aiOn)
+          .onChange(async (value) => {
+            this.plugin.settings.aiModel = value.trim() || 'deepseek-chat';
             await this.plugin.saveSettings();
           })
       );

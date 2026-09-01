@@ -3,8 +3,8 @@
 把你自己的 B站收藏夹同步为 Obsidian 本地 Markdown 笔记。
 
 - 官网与定价：https://product.aiprice.store/bili
-- 免费版：50 条同步额度（元数据 + 封面本地化 + frontmatter + 增量同步）
-- 永久版 ¥99 买断：无限同步 + 逐字稿（字幕/AI 字幕）+ V2 AI 总结免费升级
+- 免费版：20 条同步额度（元数据 + 封面本地化 + frontmatter + 增量同步）
+- 永久版 ¥99 买断：无限同步 + 逐字稿（字幕/AI 字幕）+ AI 总结（BYOK 已上线）
 
 ## 安装
 
