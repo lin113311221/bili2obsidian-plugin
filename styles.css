@@ -127,6 +127,12 @@
   min-width: 110px;              /* 按钮有可点击的最小宽度，不会太窄 */
 }
 
+/* 手动填专辑输入框（v0.5.26）：占满一行才好贴长名字 */
+.clipin-manual-collections-input {
+  width: 100%;
+  margin: 8px 0 4px;
+}
+
 /* 设置页 */
 .clipin-settings h2 {
   margin-top: 22px;

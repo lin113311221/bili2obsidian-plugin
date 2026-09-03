@@ -1320,13 +1320,18 @@ var require_xiaohongshu = __commonJS({
         await webviewHost.reinject("/api/sns/web/");
         await webviewHost.clickByText({ selector: '.reds-tab, .feeds-tab, [class*="tab-item"]', text: "\u6536\u85CF" });
         await webviewHost.sleep(jitter(2300, 1200));
+        await webviewHost.clickByText({ selector: "*", text: "\u4E13\u8F91" });
+        await webviewHost.sleep(jitter(1600, 800));
         await webviewHost.scrollToBottom();
         await webviewHost.sleep(jitter(1200, 900));
         const captured = await webviewHost.getCaptured();
-        const albums = extractAlbums(captured);
+        const urls = (captured || []).map((c) => c && c.url || "(\u65E0url)");
+        log(`[xhs] \u6355\u83B7 ${captured.length} \u4E2A\u54CD\u5E94\uFF1A${urls.join(" | ") || "(\u65E0)"}`);
+        const boardResp = (captured || []).filter((c) => c && typeof c.url === "string" && c.url.includes("/board"));
+        const albums = extractAlbums(boardResp.length ? boardResp : captured);
         log(`[xhs] \u55C5\u63A2\u5230 ${albums.length} \u4E2A\u4E13\u8F91\uFF08\u6765\u81EA ${captured.length} \u4E2A\u54CD\u5E94\uFF09`);
         if (!albums.length) {
-          throw new Error("\u6CA1\u6709\u8BFB\u5230\u4E13\u8F91\u5217\u8868\u2014\u2014\u591A\u534A\u662F\u6D4F\u89C8\u5668\u7A97\u53E3\u91CC\u8FD8\u6CA1\u767B\u5F55\uFF08\u6536\u85CF\u9875\u8981\u767B\u5F55\u624D\u80FD\u770B\uFF09\uFF0C\u8BF7\u767B\u5F55\u540E\u91CD\u65B0\u70B9\u300C\u9009\u62E9\u4E13\u8F91\u300D");
+          throw new Error("\u6CA1\u6709\u8BFB\u5230\u4E13\u8F91\u5217\u8868\uFF08\u9875\u9762\u6CA1\u8FD4\u56DE\u4E13\u8F91\u63A5\u53E3\uFF0C\u53EF\u80FD\u6539\u7248\u6216\u672A\u52A0\u8F7D\u5B8C\uFF09\u3002\u53EF\u91CD\u8BD5\u4E00\u6B21\uFF1B\u6216\u5728\u63A5\u4E0B\u6765\u7684\u9009\u62E9\u6846\u91CC\u624B\u52A8\u586B\u4E13\u8F91\u540D");
         }
         return albums.map((a) => ({ id: a.title, title: a.title, count: a.count || 0 }));
       },
@@ -1483,7 +1488,7 @@ var require_xiaohongshu = __commonJS({
             const title = it.name || it.title || it.board_name || "";
             const id = it.id || it.board_id || it.boardId || "";
             const count = Number(it.notes_count ?? it.note_count ?? it.count ?? it.total) || 0;
-            if (title && (id || count) && !it.note_card && !it.note_id && it.desc === void 0) {
+            if (title && (id || count) && !it.note_card && !it.note_id && it.display_title === void 0) {
               const key = String(id || title);
               if (!seen.has(key)) {
                 seen.add(key);
@@ -5890,6 +5895,18 @@ var ClipinPlugin = class extends Plugin {
         if (!host) return;
         try {
           list = await p.listCollections({ auth: cfg.auth, http: this.http, webviewHost: host, logger: (m) => this._log("info", m) });
+        } catch (e) {
+          if (modal) modal.close();
+          this._log("error", `\u8BFB\u4E13\u8F91\u5217\u8868\u5931\u8D25\uFF1A${e && e.message || e}`);
+          new Notice(`\u81EA\u52A8\u8BFB\u4E13\u8F91\u5217\u8868\u5931\u8D25\uFF1A${e && e.message || e}`, 5e3);
+          new ManualCollectionsModal(this.app, p, async (names, all) => {
+            cfg.collections = names;
+            cfg.collectionsConfirmed = true;
+            await this.saveSettings();
+            if (this.settingTab) this.settingTab.display();
+            new Notice(all ? "\u5DF2\u786E\u8BA4\u4E3A\u540C\u6B65\u5168\u90E8\u6536\u85CF" : names.length ? `\u5DF2\u8BBE\u4E3A\u53EA\u540C\u6B65\uFF1A${names.join("\u3001")}` : "\u5DF2\u53D6\u6D88\uFF0C\u672A\u8BBE\u7F6E\u540C\u6B65\u8303\u56F4");
+          }).open();
+          return;
         } finally {
           if (modal) modal.close();
         }
@@ -5897,11 +5914,18 @@ var ClipinPlugin = class extends Plugin {
         list = await p.listCollections({ auth: cfg.auth, http: this.http });
       }
       if (!list || !list.length) {
-        new Notice("\u6CA1\u8BFB\u5230\u4E13\u8F91\u2014\u2014\u5C06\u4FDD\u6301\u300C\u540C\u6B65\u5168\u90E8\u6536\u85CF\u300D");
+        new ManualCollectionsModal(this.app, p, async (names, all) => {
+          cfg.collections = names;
+          cfg.collectionsConfirmed = true;
+          await this.saveSettings();
+          if (this.settingTab) this.settingTab.display();
+          new Notice(all ? "\u5DF2\u786E\u8BA4\u4E3A\u540C\u6B65\u5168\u90E8\u6536\u85CF" : names.length ? `\u5DF2\u8BBE\u4E3A\u53EA\u540C\u6B65\uFF1A${names.join("\u3001")}` : "\u5DF2\u53D6\u6D88\uFF0C\u672A\u8BBE\u7F6E\u540C\u6B65\u8303\u56F4");
+        }).open();
         return;
       }
       new CollectionPickerModal(this.app, list, sel, async (chosen) => {
         cfg.collections = chosen;
+        cfg.collectionsConfirmed = true;
         await this.saveSettings();
         if (this.settingTab) this.settingTab.display();
         new Notice(chosen.length ? `\u5DF2\u8BBE\u4E3A\u53EA\u540C\u6B65\uFF1A${chosen.join("\u3001")}` : "\u5DF2\u8BBE\u4E3A\u540C\u6B65\u5168\u90E8\u6536\u85CF");
@@ -6053,6 +6077,14 @@ var ClipinPlugin = class extends Plugin {
       new Notice(`\u5F00\u59CB\u540C\u6B65 ${p.name}\u2026\uFF08\u5982\u5F39\u51FA\u6D4F\u89C8\u5668\u7A97\u53E3\uFF0C\u767B\u5F55\u540E\u70B9\u300C\u5F00\u59CB\u8BFB\u53D6\u300D\uFF09`);
       const isPro = !!this.settings.licenseValid;
       const needHost = platformId === "xiaohongshu" || platformId === "twitter";
+      if (needHost && p.capabilities && p.capabilities.collections && !(cfg.collections || []).length && !cfg.collectionsConfirmed) {
+        new Notice("\u7B2C\u4E00\u6B21\u540C\u6B65\u524D\uFF0C\u5148\u9009\u62E9\u8981\u540C\u6B65\u54EA\u4E9B\u4E13\u8F91", 4e3);
+        await this.promptChooseCollections(platformId);
+        if (!(cfg.collections || []).length && !cfg.collectionsConfirmed) {
+          new Notice("\u6CA1\u6709\u786E\u8BA4\u540C\u6B65\u8303\u56F4\uFF0C\u5DF2\u53D6\u6D88\u672C\u6B21\u540C\u6B65\u3002\u53EF\u5728\u8BBE\u7F6E\u9875 \u2192 \u300C\u91CD\u65B0\u9009\u62E9\u4E13\u8F91\u300D\u91CC\u518D\u914D");
+          return;
+        }
+      }
       const host = needHost ? await this.openBrowser(p, cfg.auth && cfg.auth.cookie) : void 0;
       if (needHost && !host) {
         new Notice("\u5DF2\u53D6\u6D88\u540C\u6B65\uFF08\u6D4F\u89C8\u5668\u7A97\u53E3\u5DF2\u5173\u95ED\uFF09");
@@ -6498,6 +6530,48 @@ var CollectionPickerModal = class extends Modal {
       await this.onSave([]);
       this.close();
     };
+  }
+  onClose() {
+    this.contentEl.empty();
+  }
+};
+var ManualCollectionsModal = class extends Modal {
+  /**
+   * @param {App} app
+   * @param {Object} provider
+   * @param {Function} onSave (names: string[], all: boolean) => void
+   */
+  constructor(app, provider, onSave) {
+    super(app);
+    this.provider = provider;
+    this.onSave = onSave;
+  }
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    setModalSize(this, false);
+    contentEl.createEl("h3", { text: `\u624B\u52A8\u586B\u8981\u540C\u6B65\u7684${this.provider.name}\u4E13\u8F91` });
+    contentEl.createEl("p", {
+      text: "\u6253\u5F00\u5C0F\u7EA2\u4E66 App \u2192 \u6211 \u2192 \u6536\u85CF \u2192 \u4E13\u8F91\uFF0C\u628A\u4E13\u8F91\u540D\u539F\u6837\u586B\u8FDB\u6765\uFF0C\u591A\u4E2A\u7528\u9017\u53F7\u5206\u9694\u3002\u540C\u6B65\u65F6\u6309\u540D\u5B57\u5339\u914D\uFF0C\u586B\u9519\u540D\u5B57\u7684\u4E13\u8F91\u4F1A\u88AB\u8DF3\u8FC7\u5E76\u5728\u65E5\u5FD7\u91CC\u8BF4\u660E\u3002",
+      cls: "clipin-tip"
+    });
+    const input = contentEl.createEl("input", { type: "text" });
+    input.setAttr("placeholder", "\u4F8B\uFF1AAI \u5B66\u4E60, \u722C\u866B\u5B9E\u6218");
+    input.addClass("clipin-manual-collections-input");
+    const row = contentEl.createDiv({ cls: "clipin-btn-row" });
+    const save = row.createEl("button", { text: "\u4FDD\u5B58\u5E76\u53EA\u540C\u6B65\u8FD9\u4E9B\u4E13\u8F91", cls: "mod-cta" });
+    save.onclick = async () => {
+      const names = String(input.value || "").split(/[,，、;；\n]+/).map((s) => s.trim()).filter(Boolean);
+      await this.onSave(names, false);
+      this.close();
+    };
+    const all = row.createEl("button", { text: "\u540C\u6B65\u5168\u90E8\u6536\u85CF" });
+    all.onclick = async () => {
+      await this.onSave([], true);
+      this.close();
+    };
+    const cancel = row.createEl("button", { text: "\u53D6\u6D88" });
+    cancel.onclick = () => this.close();
   }
   onClose() {
     this.contentEl.empty();
