@@ -5131,18 +5131,26 @@ function makeWebviewEl(contentEl, partitionId, src, cls, opts) {
 function webviewCanAccessWebContents(wv) {
   return !!(wv && typeof wv.getWebContents === "function");
 }
-async function readPartitionCookies(partitionId, url) {
+function getPartitionSession(partitionId) {
   try {
     const electron = require("electron");
     const session = electron.remote && electron.remote.session || electron.session;
     if (session && typeof session.fromPartition === "function") {
       const ses = session.fromPartition(partitionId);
-      if (ses && ses.cookies && typeof ses.cookies.get === "function") {
-        const list = await ses.cookies.get({ url });
-        if (list) return { cookies: list, via: "session.fromPartition" };
-      }
+      if (ses && ses.cookies) return ses;
     }
   } catch (_) {
+  }
+  return null;
+}
+async function readPartitionCookies(partitionId, url) {
+  const ses = getPartitionSession(partitionId);
+  if (ses && typeof ses.cookies.get === "function") {
+    try {
+      const list = await ses.cookies.get({ url });
+      if (list) return { cookies: list, via: "session.fromPartition" };
+    } catch (_) {
+    }
   }
   return null;
 }
@@ -5169,18 +5177,6 @@ function attachWebviewGuards(wv, plugin, tag) {
   };
   wv.addEventListener("did-stop-loading", () => {
     log("did-stop-loading");
-    if (webviewCanAccessWebContents(wv)) {
-      try {
-        const wc = wv.getWebContents();
-        if (wc && typeof wc.getProcessMemoryInfo === "function") {
-          Promise.resolve(wc.getProcessMemoryInfo()).then((info) => {
-            if (info) log(`\u5185\u5D4C\u8FDB\u7A0B\u5185\u5B58 ${Math.round((info.private || info.residentSet || 0) * 1024 / 1048576)}MB`);
-          }).catch(() => {
-          });
-        }
-      } catch (_) {
-      }
-    }
     setTimeout(beat, 1e3);
   });
   wv.addEventListener("render-process-gone", (e) => {
@@ -5278,25 +5274,34 @@ var LoginModal = class extends Modal {
   async extract() {
     const p = this.provider;
     try {
-      if (!webviewCanAccessWebContents(this.webview)) {
-        const msg = p.id === "bilibili" ? "\u5F53\u524D\u73AF\u5883\u4E0D\u652F\u6301\u81EA\u52A8\u63D0\u53D6\u3002\u8BF7\u5728\u4E0A\u65B9\u7A97\u53E3\u767B\u5F55\u540E\uFF0C\u6309 F12 \u2192 Application \u2192 Cookies \u2192 https://www.bilibili.com\uFF0C\u590D\u5236 SESSDATA \u7684\u503C\uFF0C\u5728\u8BBE\u7F6E\u9875\u624B\u52A8\u7C98\u8D34" : "\u5F53\u524D\u73AF\u5883\u4E0D\u652F\u6301\u81EA\u52A8\u63D0\u53D6\u3002\u8BF7\u5728\u4E0A\u65B9\u7A97\u53E3\u5B8C\u6210\u767B\u5F55\uFF0C\u7136\u540E\u5173\u6389\u672C\u7A97\u53E3\u3001\u5728\u8BBE\u7F6E\u9875\u628A\u5B8C\u6574 Cookie\uFF08\u542B web_session\uFF09\u4E0E\u7528\u6237 ID \u624B\u52A8\u7C98\u8D34\u8FDB\u6765\uFF1B\u6216\u76F4\u63A5\u7528\u540C\u6B65\u7A97\u53E3\u626B\u7801\u767B\u5F55\uFF08\u767B\u5F55\u6001\u4F1A\u81EA\u52A8\u4FDD\u5B58\uFF09";
+      const partition = `persist:clipin-${p.id}`;
+      const targetUrl = p.id === "bilibili" ? "https://www.bilibili.com" : p.capabilities.loginUrl;
+      let r = await readPartitionCookies(partition, targetUrl);
+      if (r) {
+        this.plugin._log("info", `[login] \u63D0\u53D6 cookie \u901A\u9053\uFF1A${r.via}`);
+      } else if (webviewCanAccessWebContents(this.webview)) {
+        const wc = this.webview.getWebContents();
+        if (!wc) throw new Error("\u6D4F\u89C8\u5668\u7EC4\u4EF6\u5C1A\u672A\u5C31\u7EEA\uFF0C\u8BF7\u7A0D\u7B49\u4E24\u79D2\u518D\u8BD5");
+        const all0 = await wc.session.cookies.get({ url: targetUrl });
+        r = { cookies: all0 || [], via: "webview.getWebContents\uFF08\u9000\u8DEF\uFF09" };
+        this.plugin._log("warn", `[login] \u63D0\u53D6 cookie \u8D70\u4E86\u9000\u8DEF\uFF1A${r.via}`);
+      } else {
+        const msg = p.id === "bilibili" ? "\u5F53\u524D\u73AF\u5883\u8BFB\u4E0D\u5230 Cookie\u3002\u8BF7\u5173\u6389\u672C\u7A97\u53E3\uFF0C\u6539\u7528\u300C\u626B\u7801\u767B\u5F55\u300D\u2014\u2014\u4E0D\u9700\u8981\u5185\u5D4C\u6D4F\u89C8\u5668\uFF0C\u4E5F\u4E0D\u4F1A\u5D29" : "\u5F53\u524D\u73AF\u5883\u8BFB\u4E0D\u5230 Cookie\u3002\u8BF7\u5728\u4E0A\u65B9\u7A97\u53E3\u5B8C\u6210\u767B\u5F55\u540E\uFF0C\u5728\u8BBE\u7F6E\u9875\u628A\u5B8C\u6574 Cookie\uFF08\u542B web_session\uFF09\u4E0E\u7528\u6237 ID \u624B\u52A8\u7C98\u8D34\u8FDB\u6765";
         new Notice(`${p.name}\uFF1A${msg}`, 9e3);
         return;
       }
-      const wc = this.webview.getWebContents();
-      if (!wc) throw new Error("\u6D4F\u89C8\u5668\u7EC4\u4EF6\u5C1A\u672A\u5C31\u7EEA\uFF0C\u8BF7\u7A0D\u7B49\u4E24\u79D2\u518D\u8BD5");
+      const all = r.cookies || [];
       let value = "";
       let userId = "";
       if (p.id === "bilibili") {
-        const cookies = await wc.session.cookies.get({ url: "https://www.bilibili.com", name: "SESSDATA" });
-        if (!cookies || !cookies.length) throw new Error("\u672A\u627E\u5230 SESSDATA\uFF0C\u8BF7\u786E\u8BA4\u5DF2\u5728\u4E0A\u65B9\u7A97\u53E3\u767B\u5F55");
-        value = cookies[0].value;
+        const hit = all.find((c) => c.name === "SESSDATA" && c.value);
+        if (!hit) throw new Error("\u672A\u627E\u5230 SESSDATA\uFF0C\u8BF7\u786E\u8BA4\u5DF2\u5728\u4E0A\u65B9\u7A97\u53E3\u767B\u5F55");
+        value = hit.value;
       } else {
-        const all = await wc.session.cookies.get({ url: p.capabilities.loginUrl });
-        value = (all || []).map((c) => `${c.name}=${c.value}`).join("; ");
+        value = all.map((c) => `${c.name}=${c.value}`).join("; ");
         if (!value) throw new Error("\u672A\u8BFB\u5230 Cookie\uFF0C\u8BF7\u786E\u8BA4\u5DF2\u767B\u5F55");
         if (p.id === "xiaohongshu") {
-          const realUid = (all || []).find((c) => /^(userid|uid|user_id)$/i.test(c.name) && /^[a-f0-9]{16,32}$/i.test(c.value || ""));
+          const realUid = all.find((c) => /^(userid|uid|user_id)$/i.test(c.name) && /^[a-f0-9]{16,32}$/i.test(c.value || ""));
           if (realUid) userId = realUid.value;
         }
       }
@@ -6162,12 +6167,12 @@ var BrowserModal = class extends Modal {
       this.cookiesInjected = true;
       const cookieStr = (this.authCookie || "").trim();
       if (cookieStr) {
-        if (!webviewCanAccessWebContents(this.webview)) {
+        const ses = getPartitionSession(`persist:clipin-${p.id}`);
+        if (!ses) {
           this.plugin._log("info", `[webview] \u672C\u73AF\u5883\u4E0D\u652F\u6301\u81EA\u52A8\u6CE8\u5165 Cookie\uFF1B\u8BF7\u5728\u7A97\u53E3\u4E2D\u767B\u5F55\u4E00\u6B21\uFF08\u767B\u5F55\u6001\u6301\u4E45\u4FDD\u5B58\u5728 persist:clipin-${p.id}\uFF09`);
           return;
         }
         try {
-          const ses = this.webview.getWebContents().session;
           const host = new URL(this.webview.getURL() || p.capabilities.loginUrl).hostname;
           const rootDomain = host.split(".").slice(-2).join(".");
           const pairs = cookieStr.split(";").map((x) => x.trim()).filter((x) => x.includes("="));
