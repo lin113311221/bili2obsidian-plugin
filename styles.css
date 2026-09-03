@@ -30,6 +30,43 @@
   background: var(--background-secondary);
 }
 
+/* 离屏 webview（v0.5.16 兼容档 L5）：
+   缩到 1×1 并移出视口，不参与布局与合成，从根上卸掉渲染/GPU 压力。
+   竞品 xhs2obsidian 的签名 webview 就是这个姿势，实测从不崩。 */
+.clipin-webview-offscreen {
+  position: absolute !important;
+  left: -9999px !important;
+  top: 0 !important;
+  width: 1px !important;
+  height: 1px !important;
+  min-height: 0 !important;
+  border: none !important;
+  opacity: 0.01;                  /* 不能用 0：完全透明时部分 Chromium 版本会跳过加载 */
+  pointer-events: none;
+}
+
+/* 扫码登录：二维码居中在白底卡片里，保证对比度够、手机好扫 */
+.clipin-qr-box {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 18px;
+  background: #fff;
+  border-radius: 10px;
+  margin: 8px 0 4px;
+}
+.clipin-qr-box svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+.clipin-qr-modal {
+  text-align: center;
+}
+.clipin-qr-modal h3 {
+  margin-top: 0;
+}
+
 /* 弹窗底部按钮行：水平居中，避免被推到视口右边缘外；
    flex:0 保证不被 webview 挤掉，padding 给按钮左右安全间距 */
 .clipin-btn-row {
