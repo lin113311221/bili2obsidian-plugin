@@ -1429,13 +1429,22 @@ var require_xiaohongshu = __commonJS({
             }
             if (albumTitle) {
               await webviewHost.sleep(jitter(2e3, 1e3));
+              await webviewHost.clickByText({ selector: "*", text: "\u4E13\u8F91" });
+              await webviewHost.sleep(jitter(1800, 900));
               await webviewHost.clearCaptured();
               await webviewHost.sleep(300);
-              const clicked = await webviewHost.clickByText({
-                selector: '[class*="board"], [class*="album"], [class*="collect"] a, a, div',
-                text: albumTitle
-              });
-              if (!clicked) throw new Error(`\u6CA1\u627E\u5230\u4E13\u8F91\u300C${albumTitle}\u300D\uFF08\u5148\u5728\u8BBE\u7F6E\u91CC\u62C9\u4E00\u6B21\u4E13\u8F91\u5217\u8868\u6838\u5BF9\u540D\u5B57\uFF09`);
+              const CARD_SEL = '[class*="board"], [class*="album"], [class*="collect"] a, a, div';
+              let clicked = await webviewHost.clickByText({ selector: CARD_SEL, text: albumTitle });
+              if (!clicked) {
+                await webviewHost.scrollToBottom();
+                await webviewHost.sleep(jitter(1200, 600));
+                clicked = await webviewHost.clickByText({ selector: CARD_SEL, text: albumTitle });
+              }
+              if (!clicked) {
+                const urls = (await webviewHost.getCaptured()).map((c) => c && c.url || "(\u65E0url)");
+                log(`[xhs] \u70B9\u4E0D\u5230\u4E13\u8F91\u5361\u7247\u65F6\u7684\u9875\u9762\u8BF7\u6C42\uFF1A${urls.join(" | ") || "(\u65E0)"}`);
+                throw new Error(`\u6CA1\u627E\u5230\u4E13\u8F91\u300C${albumTitle}\u300D\u2014\u2014\u5DF2\u628A\u9875\u9762\u8BF7\u6C42\u8BB0\u8FDB sync.log\uFF0C\u8BF7\u628A\u300C\u70B9\u4E0D\u5230\u4E13\u8F91\u5361\u7247\u65F6\u7684\u9875\u9762\u8BF7\u6C42\u300D\u4E00\u884C\u53D1\u7ED9\u5F00\u53D1\u8005`);
+              }
               await webviewHost.sleep(jitter(2300, 1200));
             }
           },
@@ -2877,13 +2886,15 @@ var require_webview_host = __commonJS({
           const o = opts || {};
           if (!o.text) return false;
           const code = `(function(){
+        var TXT = ${JSON.stringify(o.text)};
         var els = document.querySelectorAll(${JSON.stringify(o.selector || "*")});
+        var best = null, bestLen = -1;
         for (var i = 0; i < els.length; i++){
           var t = (els[i].innerText || els[i].textContent || '').trim();
-          if (t === ${JSON.stringify(o.text)} || t.indexOf(${JSON.stringify(o.text)}) === 0) {
-            els[i].click(); return true;
-          }
+          if (t !== TXT && t.indexOf(TXT) !== 0) continue;
+          if (best === null || t.length < bestLen) { best = els[i]; bestLen = t.length; }
         }
+        if (best) { best.click(); return true; }
         return false;
       })();`;
           try {
