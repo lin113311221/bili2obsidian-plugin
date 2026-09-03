@@ -6,29 +6,35 @@
   width: 78vw;
   max-width: 1100px;
   min-width: 640px;
+  display: flex;
+  flex-direction: column;
+  max-height: 82vh;   /* 弹窗整体限高，避免在某些分辨率下撑到屏幕外 */
 }
 
+/* h3 + tip 文字占顶部自然高度 */
 .clipin-tip {
   color: var(--text-muted);
   margin-top: 0;
 }
 
-/* 内嵌浏览器窗口：宽度优先（二维码要够大），高度给按钮行让位，别把按钮挤出屏幕 */
+/* 内嵌浏览器窗口：宽度优先（二维码要够大），
+   高度由 flex 弹窗剩余空间决定，按钮行不会再被挤出屏幕 */
 .clipin-webview {
   width: 100%;
-  height: min(62vh, calc(100vh - 260px));
-  min-height: 320px;
+  flex: 1 1 auto;
+  min-height: 360px;
   border: 1px solid var(--background-modifier-border);
   border-radius: 8px;
   background: var(--background-secondary);
 }
 
-/* 弹窗底部按钮行 */
+/* 弹窗底部按钮行：flex:0 保证不被压缩，永远紧贴底部 */
 .clipin-btn-row {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
   margin-top: 12px;
+  flex: 0 0 auto;
 }
 
 /* 设置页 */
