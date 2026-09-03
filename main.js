@@ -5200,6 +5200,7 @@ function attachWebviewGuards(wv, plugin, tag) {
   wv.addEventListener("responsive", () => log("webview \u6062\u590D\u54CD\u5E94"));
   let beats = 0;
   const beat = () => {
+    if (!wv.isConnected) return;
     beats += 1;
     let mem = "";
     try {

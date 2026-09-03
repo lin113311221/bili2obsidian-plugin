@@ -2,9 +2,17 @@
 
 /* ── 弹窗尺寸：限高用「窗口高度 - 边距」，取代默认 85vh（vh 是视口单位，
    窗口未最大化时会把按钮行推出窗口外，看不见也点不到）。弹窗本身保持 Obsidian 默认居中。 ── */
-/* 内嵌浏览器要更宽：登录二维码得够大才扫得上 */
+/* 内嵌浏览器弹窗（v0.5.24）：竞品 xhs2obsidian 同款**固定尺寸** 820×640
+   （.redbook-pull-login-modal）。为什么固定尺寸是关键：
+   <webview> 的 guest 视口尺寸在首次布局时定死，之后容器被 flex 拉高它**不跟随**
+   （Electron webview 的老毛病）——v0.5.23 弹性限高下，webview 先按小尺寸渲染，
+   容器后被 flex 撑高，下半截永远是死的灰底（用户 23:28 截图实证）。
+   固定尺寸让 webview 首次布局就是最终布局，一次到位。
+   max-* 保底：窗口比 820×640 还小时自动收缩，按钮行不会被推出窗口。 */
 .modal.clipin-modal-wide {
-  width: min(880px, calc(100% - 32px));
+  width: 820px;
+  max-width: calc(100% - 32px);
+  height: 640px;
   max-height: calc(100% - 32px);
   box-sizing: border-box;
 }
@@ -58,12 +66,12 @@
    容器 overflow:hidden + border-radius，webview 本身 border:none。 */
 .clipin-webview-container {
   flex: 1 1 auto;
+  /* min-height 必须 0：容器高度由「弹窗固定 640 高 - 头部文字 - 按钮行」算出，
+     是确定值，webview 首次布局即到位。给 min-height 反而会破坏收缩链。 */
+  min-height: 0;
   position: relative;
   overflow: hidden;
   width: 100%;
-  /* v0.5.23：从 240 提到 360 —— 二维码区大约需要 360~400px 才不会被裁。
-     上限由外层 max-height: calc(100% - 32px) 控制，不会顶破弹窗。 */
-  min-height: 360px;
   border: 1px solid var(--background-modifier-border);
   border-radius: 8px;
   background: var(--background-secondary);
