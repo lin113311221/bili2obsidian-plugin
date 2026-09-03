@@ -2996,6 +2996,7 @@ var LoginModal = class extends Modal {
 };
 var ClipinPlugin = class extends Plugin {
   async onload() {
+    this._recoverCrashedPartitions();
     await this.migrateLegacySettings();
     await this.loadSettings();
     this.http = core.createHttp({
@@ -3051,6 +3052,57 @@ var ClipinPlugin = class extends Plugin {
   }
   onUnload() {
     this._log("info", "\u63D2\u4EF6\u5378\u8F7D\uFF08Obsidian \u5173\u95ED\u6216\u63D2\u4EF6\u88AB\u7981\u7528/\u91CD\u8F7D\uFF09");
+  }
+  /**
+   * 崩溃自愈（v0.5.11）：上一次运行「插件已加载」之后没有「插件卸载」，且最后一行
+   * 是内嵌浏览器/同步活动 → 进程是死在内嵌浏览器使用中途的，persist:clipin-* 分区
+   * 的 SQLite（Cookies/Local Storage）很可能处于写一半的损坏状态——不清理的话
+   * 下次再开 webview 会一加载就崩，形成崩溃循环（2026-09-03 真机两次闪退的教训）。
+   * 处理：把 clipin-* 分区目录改名隔离（不删，留底可查），下次 webview 从干净状态重建。
+   * 注意必须在 onload 最前面跑——此时还没创建任何 webview，分区文件无锁。
+   */
+  _recoverCrashedPartitions() {
+    try {
+      const fs = require("fs");
+      const path = require("path");
+      const a = this.app.vault.adapter;
+      const base = a && typeof a.getBasePath === "function" ? a.getBasePath() : "";
+      const logPath = path.join(base, this.logFilePath);
+      if (!fs.existsSync(logPath)) return;
+      const lines = fs.readFileSync(logPath, "utf8").slice(-2e4).split("\n").filter(Boolean);
+      let lastLoadIdx = -1;
+      for (let i = lines.length - 1; i >= 0; i--) {
+        if (lines[i].includes("\u63D2\u4EF6\u5DF2\u52A0\u8F7D")) {
+          lastLoadIdx = i;
+          break;
+        }
+      }
+      if (lastLoadIdx < 0) return;
+      const after = lines.slice(lastLoadIdx + 1);
+      if (after.some((l) => l.includes("\u63D2\u4EF6\u5378\u8F7D"))) return;
+      const lastLine = lines[lines.length - 1] || "";
+      const diedMidActivity = /did-start-loading|dom-ready|will-navigate|unresponsive|did-stop-loading|\[webview\]|\[login\]|\[browser\]|开始同步/.test(lastLine);
+      if (!diedMidActivity) return;
+      const appdata = process.env.APPDATA;
+      if (!appdata) return;
+      const partRoot = path.join(appdata, "obsidian", "Partitions");
+      if (!fs.existsSync(partRoot)) return;
+      const stamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-").slice(0, 19);
+      const moved = [];
+      for (const name of fs.readdirSync(partRoot)) {
+        if (!name.startsWith("clipin-")) continue;
+        try {
+          fs.renameSync(path.join(partRoot, name), path.join(partRoot, `${name}.crashed-${stamp}`));
+          moved.push(name);
+        } catch (_) {
+        }
+      }
+      if (moved.length) {
+        this._log("error", `\u68C0\u6D4B\u5230\u4E0A\u6B21\u5728\u5185\u5D4C\u6D4F\u89C8\u5668\u4F7F\u7528\u4E2D\u5F02\u5E38\u9000\u51FA\uFF0C\u5DF2\u81EA\u52A8\u91CD\u7F6E\u6D4F\u89C8\u5668\u6570\u636E\uFF08${moved.join(", ")} \u2192 .crashed-${stamp}\uFF09\uFF1B\u9700\u91CD\u65B0\u767B\u5F55\u4E00\u6B21`);
+        setTimeout(() => new Notice("Savault\uFF1A\u68C0\u6D4B\u5230\u4E0A\u6B21\u5185\u5D4C\u6D4F\u89C8\u5668\u5F02\u5E38\u9000\u51FA\uFF0C\u5DF2\u81EA\u52A8\u91CD\u7F6E\u5176\u7F13\u5B58\u6570\u636E\uFF08\u767B\u5F55\u6001\u9700\u91CD\u65B0\u767B\u5F55\u4E00\u6B21\uFF09\u3002", 9e3), 1500);
+      }
+    } catch (_) {
+    }
   }
   /* ---------- 落盘日志：渲染进程 console 不进 obsidian.log，报错写 sync.log 才能排查 ---------- */
   get logFilePath() {
