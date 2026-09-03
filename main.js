@@ -1339,31 +1339,66 @@ var require_xiaohongshu = __commonJS({
         return { ok: true, user: auth.nickname || "", userId: auth.userId };
       },
       /**
-       * 登录态验证 + 取用户信息（v0.5.20，对齐竞品 xhs2obsidian login-modal.ts:145-161）。
+       * 登录态验证 + 取用户信息。
        *
-       * 关键情报：/v2/user/me 不需要 x-s 签名，带完整 Cookie 裸调即可 ——
-       * 这是拿 userId 的**可靠**途径。别再从 cookie 名里猜（cookie 里根本没有 userId），
-       * 也别 executeJavaScript 读 location.href（跨进程操作 guest，崩溃嫌疑人）。
+       * v0.5.25 更新：**edith /v2/user/me 已收紧，现在需要 x-s 签名**（2026-09-04 用
+       * 有效登录 cookie 实测：v1/v2 全部返回 {"code":-1,"success":false}，竞品同款请求
+       * 头也一样被拒）。改为从 /explore 的 HTML 里解析 `__INITIAL_STATE__` 的
+       * `"user":{"loggedIn":true,...,"userInfo":{"user_id":...,"nickname":...}}` 块：
+       *   - HTML 页面不走 API 签名校验，带 cookie 就能拿到；
+       *   - 整个页面 `user_id` 只出现这一次（feed 里其他作者的卡片不带这个字段），
+       *     所以锚定 `"user":{"loggedIn":true` 后在片段里抓，不会误抓别人；
+       *   - 实测样例：user_id=617feda60000000021028da6, nickname="Jakelin"。
+       * edith 接口保留为退路（万一官方放宽，还能用）。
        *
-       * @param {Function} request core/http 适配后的请求函数（url, opts）=> {status, headers, json}
+       * @param {Function} request core/http 适配后的请求函数（url, opts）=> {status, headers, json, text}
        * @param {string} cookie 完整 Cookie 字符串（含 a1、web_session）
        * @returns {Promise<{userId:string, nickname:string}|null>} 未登录/验证失败返回 null
        */
       async fetchMe(request, cookie) {
-        const res = await request("https://edith.xiaohongshu.com/api/sns/web/v2/user/me", {
-          method: "GET",
-          headers: {
-            "Content-Type": "application/json",
-            "Origin": WEB,
-            "Referer": WEB + "/",
-            // 与内嵌浏览器的 UA 保持一致（Mac + 钉死 Chrome 120），避免设备指纹漂移
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Cookie": cookie
+        try {
+          const res = await request(WEB + "/explore", {
+            method: "GET",
+            headers: {
+              "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+              // 与内嵌浏览器的 UA 保持一致（Mac + 钉死 Chrome 120），避免设备指纹漂移
+              "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+              "Cookie": cookie
+            }
+          });
+          const html = res && res.text || "";
+          const anchor = html.indexOf('"user":{"loggedIn":true');
+          if (anchor >= 0) {
+            const seg = html.slice(anchor, anchor + 3e3);
+            const id = (seg.match(/"user_id":"([0-9a-fA-F]+)"/) || [])[1];
+            const nick = (seg.match(/"nickname":"((?:[^"\\]|\\.)*)"/) || [])[1] || "";
+            if (id) {
+              let nickname = nick;
+              try {
+                nickname = JSON.parse('"' + nick + '"');
+              } catch (_) {
+              }
+              return { userId: id, nickname };
+            }
           }
-        });
-        const d = res && res.json && res.json.data;
-        if (!d || !d.user_id) return null;
-        return { userId: d.user_id, nickname: d.nickname || "" };
+        } catch (_) {
+        }
+        try {
+          const res2 = await request("https://edith.xiaohongshu.com/api/sns/web/v2/user/me", {
+            method: "GET",
+            headers: {
+              "Content-Type": "application/json",
+              "Origin": WEB,
+              "Referer": WEB + "/",
+              "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+              "Cookie": cookie
+            }
+          });
+          const d = res2 && res2.json && res2.json.data;
+          if (d && d.user_id) return { userId: d.user_id, nickname: d.nickname || "" };
+        } catch (_) {
+        }
+        return null;
       },
       /**
        * webview 拦截取数。
@@ -5311,7 +5346,6 @@ var LoginModal = class extends Modal {
         this._done = true;
         this._busy = true;
         await this.extract();
-        this.close();
       } catch (_) {
       }
     }, 2e3);
@@ -5346,6 +5380,7 @@ var LoginModal = class extends Modal {
         if (!value) throw new Error("\u672A\u8BFB\u5230 Cookie\uFF0C\u8BF7\u786E\u8BA4\u5DF2\u767B\u5F55");
       }
       const cfg = this.plugin.settings.platforms[p.id];
+      let userIdMissing = false;
       if (p.id === "bilibili") cfg.auth.sessdata = value;
       else {
         cfg.auth.cookie = value;
@@ -5362,15 +5397,21 @@ var LoginModal = class extends Modal {
               cfg.auth.userId = me.userId;
               if (me.nickname) cfg.auth.nickname = me.nickname;
             } else {
-              new Notice(`${p.name} \u5DF2\u4FDD\u5B58 Cookie\uFF0C\u4F46\u9A8C\u8BC1\u767B\u5F55\u6001\u5931\u8D25\u2014\u2014\u8BF7\u786E\u8BA4\u5DF2\u5B8C\u6210\u626B\u7801\u767B\u5F55\uFF0C\u518D\u70B9\u4E00\u6B21\u300C\u63D0\u53D6\u767B\u5F55\u6001\u300D`, 6e3);
+              userIdMissing = true;
+              this.plugin._log("error", "[login] Cookie \u5DF2\u4FDD\u5B58\uFF0C\u4F46 HTML \u4E0E edith \u4E24\u6761\u8DEF\u90FD\u62FF\u4E0D\u5230 userId\uFF08\u672A\u5B8C\u6210\u767B\u5F55\u6216\u98CE\u63A7\uFF09");
             }
           } catch (_) {
-            new Notice(`${p.name} \u5DF2\u4FDD\u5B58 Cookie\uFF0C\u4F46\u81EA\u52A8\u8BC6\u522B\u7528\u6237 ID \u5931\u8D25\u2014\u2014\u8BF7\u624B\u52A8\u5728\u8BBE\u7F6E\u9875\u586B userId`, 6e3);
+            userIdMissing = true;
+            this.plugin._log("error", "[login] fetchMe \u629B\u5F02\u5E38\uFF0CuserId \u672A\u4FDD\u5B58");
           }
         }
       }
       cfg.enabled = true;
       await this.plugin.saveSettings();
+      if (userIdMissing) {
+        new Notice(`${p.name}\uFF1ACookie \u5DF2\u5B58\uFF0C\u4F46\u6CA1\u62FF\u5230\u7528\u6237 ID\u3002\u8BF7\u786E\u8BA4\u4E0A\u65B9\u9875\u9762\u5DF2\u767B\u5F55\uFF08\u80FD\u770B\u5230\u81EA\u5DF1\u7684\u5934\u50CF\uFF09\uFF0C\u518D\u70B9\u4E00\u6B21\u300C\u63D0\u53D6\u767B\u5F55\u6001\u300D`, 9e3);
+        return;
+      }
       new Notice(`${p.name} \u767B\u5F55\u6001\u5DF2\u4FDD\u5B58`);
       this.close();
       const cfgNow = this.plugin.settings.platforms[p.id];
@@ -5387,7 +5428,10 @@ var LoginModal = class extends Modal {
       clearInterval(this._detectTimer);
       this._detectTimer = null;
     }
-    this.plugin._log("info", "[login] \u767B\u5F55\u7A97\u53E3\u5DF2\u5173\u95ED");
+    if (!this._closeLogged) {
+      this._closeLogged = true;
+      this.plugin._log("info", "[login] \u767B\u5F55\u7A97\u53E3\u5DF2\u5173\u95ED");
+    }
     this.contentEl.empty();
   }
 };
@@ -6365,19 +6409,26 @@ var BrowserModal = class extends Modal {
           const host = new URL(this.webview.getURL() || p.capabilities.loginUrl).hostname;
           const rootDomain = host.split(".").slice(-2).join(".");
           const pairs = cookieStr.split(";").map((x) => x.trim()).filter((x) => x.includes("="));
+          let setCount = 0;
           for (const pair of pairs) {
             const eq = pair.indexOf("=");
             const name = pair.slice(0, eq).trim();
             const value = pair.slice(eq + 1).trim();
             if (!name) continue;
-            await ses.cookies.set({
-              url: "https://" + rootDomain,
-              domain: "." + rootDomain,
-              name,
-              value
-            });
+            const base = { url: "https://" + rootDomain, domain: "." + rootDomain, name, value };
+            try {
+              await ses.cookies.set(base);
+              setCount += 1;
+            } catch (e1) {
+              try {
+                await ses.cookies.set({ ...base, httpOnly: true });
+                setCount += 1;
+              } catch (_) {
+                this.plugin._log("info", `cookie ${name} \u6CE8\u5165\u8DF3\u8FC7\uFF08\u5206\u533A\u5DF2\u6709\u6216\u88AB\u62D2\uFF09\uFF0C\u4E0D\u5F71\u54CD\u767B\u5F55\u6001`);
+              }
+            }
           }
-          this.plugin._log("info", `\u5DF2\u6CE8\u5165 ${pairs.length} \u6761 cookie \u5230 persist:clipin-${p.id}`);
+          this.plugin._log("info", `\u5DF2\u6CE8\u5165 ${setCount}/${pairs.length} \u6761 cookie \u5230 persist:clipin-${p.id}`);
           this.webview.reload();
         } catch (e) {
           this.plugin._log("info", `\u81EA\u52A8\u6CE8\u5165 Cookie \u672A\u751F\u6548\uFF08${e.message}\uFF09\uFF0C\u8BF7\u5728\u7A97\u53E3\u4E2D\u767B\u5F55\u4E00\u6B21\u5373\u53EF`);
