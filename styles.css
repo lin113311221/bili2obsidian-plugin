@@ -19,15 +19,40 @@
   margin-top: 0;
 }
 
-/* 内嵌浏览器窗口：宽度优先（二维码要够大），
-   高度由 flex 弹窗剩余空间决定，按钮行不会再被挤出屏幕 */
-.clipin-webview {
-  width: 100%;
+/* 内嵌浏览器容器（v0.5.18）：圆角、边框、裁剪**全部由容器负责**。
+
+   ⚠️ 千万别把 border-radius 加回 webview 本身。
+   <webview> 是跨进程 iframe（本质上是个 "window" 实例），它**不服从**自身的
+   border-radius —— 内容会直接 break out 出去，视觉上根本不生效；
+   但 Chromium 仍会为这个跨进程内容尝试做圆角裁剪（rounded-corner masking），
+   需要额外开一个 GPU render surface。在有 GPU 沙箱/驱动问题的 Windows 机器上
+   这会在首次合成时把整个应用带崩 —— 现象正是「加载完 1~2 秒后 Obsidian 无声消失」。
+
+   这也是连续 6 个版本（v0.5.10~v0.5.15）改页面内容/UA/分区全部无效的原因：
+   那时候所有「兼容档位」只改 JS 属性，CSS 是共用的，所以降到底也照样崩。
+
+   正确写法来自已跑通的竞品 xhs2obsidian（styles.css:13-23）：
+   容器 overflow:hidden + border-radius，webview 本身 border:none。 */
+.clipin-webview-container {
   flex: 1 1 auto;
+  position: relative;
+  overflow: hidden;
+  width: 100%;
   min-height: 360px;
   border: 1px solid var(--background-modifier-border);
   border-radius: 8px;
   background: var(--background-secondary);
+}
+
+/* webview 本体：保持直角、无边框。任何圆角/边框都会触发上面的合成问题。 */
+.clipin-webview-container webview,
+.clipin-webview {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  border: none !important;
+  border-radius: 0 !important;
+  background: transparent;
 }
 
 /* 离屏 webview（v0.5.16 兼容档 L5）：
@@ -43,6 +68,13 @@
   border: none !important;
   opacity: 0.01;                  /* 不能用 0：完全透明时部分 Chromium 版本会跳过加载 */
   pointer-events: none;
+}
+/* 离屏档下容器也要一起缩掉，否则容器仍占据布局空间 */
+.clipin-webview-container.clipin-webview-offscreen {
+  flex: 0 0 auto !important;
+  left: -9999px !important;
+  width: 1px !important;
+  height: 1px !important;
 }
 
 /* 扫码登录：二维码居中在白底卡片里，保证对比度够、手机好扫 */

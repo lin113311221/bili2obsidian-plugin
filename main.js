@@ -5113,6 +5113,8 @@ function ensureWebviewPreload() {
 }
 function makeWebviewEl(contentEl, partitionId, src, cls, opts) {
   const o = opts || webviewProfile(DEFAULT_WEBVIEW_PROFILE);
+  const box = contentEl.createDiv({ cls: "clipin-webview-container" });
+  if (o.offscreen) box.addClass("clipin-webview-offscreen");
   const wv = document.createElement("webview");
   wv.setAttribute("partition", partitionId);
   if (o.ua) wv.setAttribute("useragent", MAC_UA);
@@ -5122,10 +5124,9 @@ function makeWebviewEl(contentEl, partitionId, src, cls, opts) {
   }
   if (o.allowpopups) wv.setAttribute("allowpopups", "");
   if (o.webprefs) wv.setAttribute("webpreferences", "autoplayPolicy=document-user-activation-required");
-  if (o.offscreen) wv.setAttribute("class", (cls ? cls + " " : "") + "clipin-webview-offscreen");
-  else if (cls) wv.setAttribute("class", cls);
+  if (cls && cls !== "clipin-webview-offscreen") wv.setAttribute("class", cls);
   wv.setAttribute("src", src || "about:blank");
-  contentEl.appendChild(wv);
+  box.appendChild(wv);
   return wv;
 }
 function webviewCanAccessWebContents(wv) {
@@ -5443,6 +5444,7 @@ var QrLoginModal = class extends Modal {
 };
 var ClipinPlugin = class extends Plugin {
   async onload() {
+    this._probeEnv();
     this._crashedLastRun = this._recoverCrashedPartitions();
     await this.migrateLegacySettings();
     await this.loadSettings();
@@ -5537,6 +5539,48 @@ var ClipinPlugin = class extends Plugin {
    * 这样用户不用手动试——每崩一次，下次启动自动换成更保守的配置，
    * 最多几轮就会落到「不崩」的组合，日志里会写明当前档位。
    */
+  /**
+   * 环境探测（v0.5.18）：把「这台机器到底能不能用新方案」一次性记进日志。
+   *
+   * 内嵌浏览器连崩 7 个版本，每次都是靠改代码 + 用户重启来验证，成本极高。
+   * 与其猜，不如让插件自己把环境讲清楚：下次再出问题，日志里直接有答案。
+   * 重点探测 WebContentsView —— Electron 30+ 官方推荐的 <webview> 替代品
+   * （<webview> 已被标记 deprecated），Obsidian-Surfing 已在新版里用它。
+   */
+  _probeEnv() {
+    try {
+      const v = typeof process !== "undefined" && process.versions || {};
+      const info = {
+        electron: v.electron || "?",
+        chrome: v.chrome || "?",
+        node: v.node || "?",
+        platform: typeof process !== "undefined" && process.platform || "?",
+        obsidian: typeof require !== "undefined" && (() => {
+          try {
+            return require("obsidian").version || "?";
+          } catch (_) {
+            return "?";
+          }
+        })() || "?"
+      };
+      let remote = false, wcv = false, fromPartition = false;
+      try {
+        const e = require("electron");
+        const r = e.remote || e.require && e.require("@electron/remote");
+        remote = !!(r && typeof r.getCurrentWindow === "function");
+        fromPartition = !!(e.session || r && r.session);
+        wcv = !!(e.WebContentsView || r && r.WebContentsView);
+      } catch (_) {
+      }
+      info.remote = remote;
+      info.WebContentsView = wcv;
+      info.fromPartition = fromPartition;
+      info.wcvUsable = wcv && remote && Number(String(info.electron).split(".")[0]) >= 30;
+      this._env = info;
+      this._log("info", `[env] ${JSON.stringify(info)}`);
+    } catch (_) {
+    }
+  }
   _applyCrashFallback() {
     if (!this._crashedLastRun) return;
     const cur = Number(this.settings.webviewProfile);
