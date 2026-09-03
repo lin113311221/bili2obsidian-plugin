@@ -2859,10 +2859,47 @@ function makeRequest() {
     };
   };
 }
+var PINNED_CHROME_VER = "120";
+var PINNED_CHROME_FULL = "120.0.6099.129";
+var MAC_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/" + PINNED_CHROME_VER + ".0.0.0 Safari/537.36";
+var WEBVIEW_PRELOAD = [
+  ";(function () {",
+  "  var VER = '" + PINNED_CHROME_VER + "';",
+  "  var FULL = '" + PINNED_CHROME_FULL + "';",
+  '  var brands = [{brand:"Not/A)Brand",version:"8"},{brand:"Chromium",version:VER},{brand:"Google Chrome",version:VER}];',
+  '  var fullVersionList = [{brand:"Not/A)Brand",version:"8.0.0.0"},{brand:"Chromium",version:FULL},{brand:"Google Chrome",version:FULL}];',
+  "  try {",
+  '    Object.defineProperty(navigator, "userAgentData", {',
+  "      get: function () { return {",
+  '        brands: brands, mobile: false, platform: "macOS",',
+  "        getHighEntropyValues: function () {",
+  '          return Promise.resolve({ architecture: "arm", bitness: "64", brands: brands,',
+  '            fullVersionList: fullVersionList, mobile: false, platform: "macOS",',
+  '            platformVersion: "14.0.0", uaFullVersion: FULL });',
+  "        } };",
+  "      }, configurable: true });",
+  "  } catch (_) {}",
+  "})();"
+].join("\n");
+function ensureWebviewPreload() {
+  try {
+    const fs = require("fs");
+    const os = require("os");
+    const path = require("path");
+    const p = path.join(os.tmpdir(), "savault-webview-preload.js");
+    fs.writeFileSync(p, WEBVIEW_PRELOAD, "utf8");
+    return "file://" + p.replace(/\\/g, "/");
+  } catch (_) {
+    return null;
+  }
+}
 function makeWebviewEl(contentEl, partitionId, src, cls) {
   const wv = document.createElement("webview");
   wv.setAttribute("partition", partitionId);
   wv.setAttribute("allowpopups", "");
+  wv.setAttribute("useragent", MAC_UA);
+  const preloadUrl = ensureWebviewPreload();
+  if (preloadUrl) wv.setAttribute("preload", preloadUrl);
   wv.setAttribute("webpreferences", "autoplayPolicy=document-user-activation-required");
   if (cls) wv.setAttribute("class", cls);
   wv.setAttribute("src", src || "about:blank");
@@ -2944,7 +2981,7 @@ var LoginModal = class extends Modal {
       text: "\u5728\u4E0B\u65B9\u7A97\u53E3\u4E2D\u767B\u5F55\u540E\uFF0C\u70B9\u51FB\u300C\u63D0\u53D6\u767B\u5F55\u6001\u300D\u3002",
       cls: "clipin-tip"
     });
-    this.plugin._log("info", `[login] \u6253\u5F00\u767B\u5F55\u7A97\u53E3\uFF1A${p.name} partition=persist:clipin-${p.id}`);
+    this.plugin._log("info", `[login] \u6253\u5F00\u767B\u5F55\u7A97\u53E3\uFF1A${p.name} partition=persist:clipin-${p.id} ua=mac preload=${ensureWebviewPreload() ? "yes" : "no"}`);
     this.webview = makeWebviewEl(contentEl, `persist:clipin-${p.id}`, p.capabilities.loginUrl || "about:blank", "clipin-webview");
     attachWebviewGuards(this.webview, this.plugin, "login");
     const row = contentEl.createDiv({ cls: "clipin-btn-row" });
@@ -3901,14 +3938,21 @@ var ClipinSettingTab = class extends PluginSettingTab {
           containerEl.createEl("p", { text: "\u26A0\uFE0F " + p.warning, cls: "clipin-warning" });
         }
         if (p.capabilities.loginUrl) {
-          new Setting(containerEl).setName("\u3000\u767B\u5F55").setDesc(loggedIn ? "\u5DF2\u4FDD\u5B58\u767B\u5F55\u6001\uFF0C\u53EF\u70B9\u6B64\u91CD\u65B0\u767B\u5F55\uFF1B\u53F3\u952E\u300C\u6E05\u9664\u767B\u5F55\u6001\u300D\u53EF\u4E00\u952E\u9000\u51FA" : "\u6253\u5F00\u5185\u5D4C\u6D4F\u89C8\u5668\u767B\u5F55\u540E\u63D0\u53D6").addButton((b) => b.setButtonText("\u6E05\u9664\u767B\u5F55\u6001").setWarning().onClick(async () => {
+          new Setting(containerEl).setName("\u3000\u767B\u5F55").setDesc(loggedIn ? "\u5DF2\u4FDD\u5B58\u767B\u5F55\u6001\uFF0C\u53EF\u70B9\u6B64\u91CD\u65B0\u767B\u5F55" : "\u6253\u5F00\u5185\u5D4C\u6D4F\u89C8\u5668\u767B\u5F55\u540E\u81EA\u52A8\u63D0\u53D6").addButton((b) => b.setButtonText("\u6E05\u9664\u767B\u5F55\u6001").setWarning().onClick(async () => {
             const moved = plugin._quarantinePartitions(`\u624B\u52A8\u6E05\u9664 ${p.name} \u767B\u5F55\u6001`);
             cfg.auth = {};
             cfg.userLabel = "";
             await plugin.saveSettings();
             this.display();
             new Notice(moved.length ? `\u5DF2\u6E05\u9664 ${p.name} \u767B\u5F55\u6001\u4E0E\u5185\u5D4C\u6D4F\u89C8\u5668\u6570\u636E\uFF0C\u4E0B\u6B21\u540C\u6B65\u9700\u91CD\u65B0\u767B\u5F55` : `\u5DF2\u6E05\u9664 ${p.name} \u4FDD\u5B58\u7684\u767B\u5F55\u6001\uFF08\u6D4F\u89C8\u5668\u7F13\u5B58\u65E0\u6570\u636E\u6216\u6B63\u88AB\u5360\u7528\uFF0C\u8BF7\u5148\u5173\u95ED\u6240\u6709\u7A97\u53E3\uFF09`);
-          })).addButton((b) => b.setButtonText("\u767B\u5F55").setCta().onClick(() => new LoginModal(this.app, plugin, p, id === "bilibili" ? "SESSDATA" : null).open()));
+          })).addButton((b) => b.setButtonText("\u767B\u5F55").setCta().onClick(() => new LoginModal(this.app, plugin, p, id === "bilibili" ? "SESSDATA" : null).open())).addButton((b) => b.setButtonText("\u7CFB\u7EDF\u6D4F\u89C8\u5668").setTooltip("\u7528\u7CFB\u7EDF\u9ED8\u8BA4\u6D4F\u89C8\u5668\u6253\u5F00\u767B\u5F55\u9875\u3002\u767B\u5F55\u540E\u6309 F12 \u2192 Console \u7C98\u8D34 document.cookie \u590D\u5236\uFF0C\u518D\u586B\u5230\u4E0B\u65B9 Cookie \u6846\u91CC").onClick(() => {
+            try {
+              require("electron").shell.openExternal(p.capabilities.loginUrl);
+              new Notice("\u5DF2\u5728\u7CFB\u7EDF\u6D4F\u89C8\u5668\u6253\u5F00\u3002\u767B\u5F55\u540E\u6309 F12\uFF0C\u5728 Console \u8F93\u5165 document.cookie \u56DE\u8F66\uFF0C\u590D\u5236\u7ED3\u679C\u7C98\u5230\u4E0B\u65B9\u300CCookie\u300D\u6846\u3002", 12e3);
+            } catch (e) {
+              new Notice("\u6253\u5F00\u5931\u8D25\uFF1A" + e.message);
+            }
+          }));
         }
         for (const f of p.authFields) {
           new Setting(containerEl).setName("\u3000" + f.label).setDesc(f.help || "").addText((t) => {
