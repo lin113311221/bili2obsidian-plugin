@@ -3096,9 +3096,9 @@ var ClipinPlugin = class extends Plugin {
    * 打开内嵌浏览器（webview 平台用）。
    * 返回一个 Promise，在用户关闭浏览器时用 webview host 兑现。
    */
-  openBrowser(provider, authCookie) {
+  openBrowser(provider, authCookie, opts) {
     return new Promise((resolve) => {
-      const modal = new BrowserModal(this.app, provider, resolve, authCookie);
+      const modal = new BrowserModal(this.app, provider, resolve, authCookie, opts);
       modal.open();
     });
   }
@@ -3343,11 +3343,12 @@ function injectChatStyle() {
   document.head.appendChild(el);
 }
 var BrowserModal = class extends Modal {
-  constructor(app, provider, resolveHost, authCookie) {
+  constructor(app, provider, resolveHost, authCookie, opts) {
     super(app);
     this.provider = provider;
     this.resolveHost = resolveHost;
     this.authCookie = authCookie || "";
+    this.opts = opts || {};
     this.closed = false;
     this.cookiesInjected = false;
   }
@@ -3356,7 +3357,7 @@ var BrowserModal = class extends Modal {
     const p = this.provider;
     contentEl.empty();
     contentEl.addClass("clipin-browser-modal");
-    contentEl.createEl("h3", { text: `\u6B63\u5728\u8BFB\u53D6 ${p.name} \u6536\u85CF` });
+    contentEl.createEl("h3", { text: this.opts.title || `\u6B63\u5728\u8BFB\u53D6 ${p.name} \u6536\u85CF` });
     contentEl.createEl("p", {
       text: this.authCookie ? "\u5DF2\u7528\u8BBE\u7F6E\u91CC\u7684 Cookie \u81EA\u52A8\u767B\u5F55\u3002\u786E\u8BA4\u9875\u9762\u662F\u767B\u5F55\u72B6\u6001\u540E\u70B9\u300C\u5F00\u59CB\u8BFB\u53D6\u300D\u3002" : "\u4FDD\u6301\u6B64\u7A97\u53E3\u6253\u5F00\uFF0C\u63D2\u4EF6\u4F1A\u81EA\u52A8\u6EDA\u52A8\u52A0\u8F7D\u3002\u5982\u672A\u767B\u5F55\u8BF7\u5148\u767B\u5F55\uFF0C\u767B\u5F55\u540E\u70B9\u300C\u5DF2\u767B\u5F55\uFF0C\u5F00\u59CB\u8BFB\u53D6\u300D\u3002",
       cls: "clipin-tip"
@@ -3370,28 +3371,32 @@ var BrowserModal = class extends Modal {
       if (this.cookiesInjected) return;
       this.cookiesInjected = true;
       const cookieStr = (this.authCookie || "").trim();
-      if (!cookieStr) return;
-      try {
-        const ses = this.webview.getWebContents().session;
-        const host = new URL(this.webview.getURL() || p.capabilities.loginUrl).hostname;
-        const rootDomain = host.split(".").slice(-2).join(".");
-        const pairs = cookieStr.split(";").map((x) => x.trim()).filter((x) => x.includes("="));
-        for (const pair of pairs) {
-          const eq = pair.indexOf("=");
-          const name = pair.slice(0, eq).trim();
-          const value = pair.slice(eq + 1).trim();
-          if (!name) continue;
-          await ses.cookies.set({
-            url: "https://" + rootDomain,
-            domain: "." + rootDomain,
-            name,
-            value
-          });
+      if (cookieStr) {
+        try {
+          const ses = this.webview.getWebContents().session;
+          const host = new URL(this.webview.getURL() || p.capabilities.loginUrl).hostname;
+          const rootDomain = host.split(".").slice(-2).join(".");
+          const pairs = cookieStr.split(";").map((x) => x.trim()).filter((x) => x.includes("="));
+          for (const pair of pairs) {
+            const eq = pair.indexOf("=");
+            const name = pair.slice(0, eq).trim();
+            const value = pair.slice(eq + 1).trim();
+            if (!name) continue;
+            await ses.cookies.set({
+              url: "https://" + rootDomain,
+              domain: "." + rootDomain,
+              name,
+              value
+            });
+          }
+          console.log(`[savault] \u5DF2\u6CE8\u5165 ${pairs.length} \u6761 cookie \u5230 persist:clipin-${p.id}`);
+          this.webview.reload();
+        } catch (e) {
+          console.warn("[savault] cookie \u6CE8\u5165\u5931\u8D25\uFF0C\u9000\u56DE\u624B\u52A8\u767B\u5F55\uFF1A", e);
         }
-        console.log(`[savault] \u5DF2\u6CE8\u5165 ${pairs.length} \u6761 cookie \u5230 persist:clipin-${p.id}`);
-        this.webview.reload();
-      } catch (e) {
-        console.warn("[savault] cookie \u6CE8\u5165\u5931\u8D25\uFF0C\u9000\u56DE\u624B\u52A8\u767B\u5F55\uFF1A", e);
+      }
+      if (this.opts.autoStart) {
+        setTimeout(() => this.startRead(), cookieStr ? 3e3 : 800);
       }
     });
     this.webview.addEventListener("render-process-gone", (e) => {
@@ -3399,19 +3404,23 @@ var BrowserModal = class extends Modal {
       new Notice("\u5185\u5D4C\u6D4F\u89C8\u5668\u5D29\u4E86\uFF08\u9875\u9762\u592A\u91CD\u6216\u5185\u5B58\u4E0D\u8DB3\uFF09\u3002\u5173\u6389\u672C\u7A97\u53E3\u91CD\u8BD5\u5373\u53EF\uFF0CObsidian \u672C\u4F53\u4E0D\u53D7\u5F71\u54CD\u3002", 8e3);
     });
     const row = contentEl.createDiv({ cls: "clipin-btn-row" });
-    const go = row.createEl("button", { text: this.authCookie ? "\u5F00\u59CB\u8BFB\u53D6" : "\u5DF2\u767B\u5F55\uFF0C\u5F00\u59CB\u8BFB\u53D6" });
-    go.addClass("mod-cta");
-    go.onclick = () => {
-      go.setText("\u8BFB\u53D6\u4E2D\u2026");
-      go.setAttr("disabled", "true");
-      this.resolveHost(createWebviewHost({
-        webview: this.webview,
-        onStatus: (s) => console.log("[clipin][webview] " + s)
-      }));
-      go.setText("\u8BFB\u53D6\u4E2D\u2026\uFF08\u5B8C\u6210\u540E\u53EF\u5173\u95ED\uFF09");
-    };
+    this.goBtn = row.createEl("button", { text: this.authCookie ? "\u5F00\u59CB\u8BFB\u53D6" : "\u5DF2\u767B\u5F55\uFF0C\u5F00\u59CB\u8BFB\u53D6" });
+    this.goBtn.addClass("mod-cta");
+    this.goBtn.onclick = () => this.startRead();
     const close = row.createEl("button", { text: "\u5173\u95ED" });
     close.onclick = () => this.close();
+  }
+  startRead() {
+    if (this.started) return;
+    this.started = true;
+    if (this.goBtn) {
+      this.goBtn.setText("\u8BFB\u53D6\u4E2D\u2026\uFF08\u5B8C\u6210\u540E\u53EF\u5173\u95ED\uFF09");
+      this.goBtn.setAttr("disabled", "true");
+    }
+    this.resolveHost(createWebviewHost({
+      webview: this.webview,
+      onStatus: (s) => console.log("[clipin][webview] " + s)
+    }));
   }
   onClose() {
     this.contentEl.empty();
@@ -3419,6 +3428,45 @@ var BrowserModal = class extends Modal {
       this.closed = true;
       this.resolveHost(null);
     }
+  }
+};
+var CollectionPickerModal = class extends Modal {
+  constructor(app, items, selected, onSave) {
+    super(app);
+    this.items = items;
+    this.selected = new Set(selected || []);
+    this.onSave = onSave;
+  }
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.createEl("h3", { text: "\u9009\u62E9\u8981\u540C\u6B65\u7684\u4E13\u8F91 / \u6536\u85CF\u5939" });
+    contentEl.createEl("p", { text: "\u4E00\u4E2A\u90FD\u4E0D\u52FE = \u540C\u6B65\u5168\u90E8\u6536\u85CF\u3002", cls: "clipin-tip" });
+    const list = contentEl.createDiv({ cls: "clipin-picker-list" });
+    for (const it of this.items) {
+      const key = String(it.id || it.title);
+      const row = list.createDiv({ cls: "clipin-picker-row" });
+      const cb = row.createEl("input", { type: "checkbox" });
+      cb.checked = this.selected.has(key) || this.selected.has(String(it.title));
+      cb.onchange = () => {
+        cb.checked ? this.selected.add(key) : this.selected.delete(key);
+      };
+      row.createEl("span", { text: it.title + (it.count ? `\uFF08${it.count} \u6761\uFF09` : "") });
+    }
+    const row2 = contentEl.createDiv({ cls: "clipin-btn-row" });
+    const save = row2.createEl("button", { text: "\u4FDD\u5B58", cls: "mod-cta" });
+    save.onclick = async () => {
+      await this.onSave([...this.selected]);
+      this.close();
+    };
+    const clear = row2.createEl("button", { text: "\u5168\u4E0D\u9009\uFF08\u540C\u6B65\u5168\u90E8\uFF09" });
+    clear.onclick = async () => {
+      await this.onSave([]);
+      this.close();
+    };
+  }
+  onClose() {
+    this.contentEl.empty();
   }
 };
 var ClipinSettingTab = class extends PluginSettingTab {
@@ -3548,9 +3596,38 @@ var ClipinSettingTab = class extends PluginSettingTab {
           }));
         }
         if (p.capabilities && p.capabilities.collections) {
-          new Setting(containerEl).setName("\u3000\u53EA\u540C\u6B65\u6307\u5B9A\u4E13\u8F91").setDesc("\u586B\u4E13\u8F91\u540D\uFF0C\u9017\u53F7\u5206\u9694\uFF08\u5982\uFF1A\u79D1\u6280, \u6548\u7387\u5DE5\u5177\uFF09\u3002\u7559\u7A7A = \u540C\u6B65\u5168\u90E8\u6536\u85CF").addText((t) => t.setPlaceholder("\u7559\u7A7A\u540C\u6B65\u5168\u90E8").setValue((cfg.collections || []).join(", ")).onChange(async (v) => {
-            cfg.collections = v.split(/[,，]/).map((x) => x.trim()).filter(Boolean);
-            await plugin.saveSettings();
+          const sel = cfg.collections || [];
+          new Setting(containerEl).setName("\u3000\u540C\u6B65\u8303\u56F4").setDesc(sel.length ? "\u53EA\u540C\u6B65\uFF1A" + sel.join("\u3001") : "\u5168\u90E8\u6536\u85CF\uFF08\u70B9\u53F3\u8FB9\u6309\u94AE\u6311\u4E13\u8F91\uFF09").addButton((b) => b.setButtonText("\u9009\u62E9\u4E13\u8F91").onClick(async () => {
+            b.setButtonText("\u8BFB\u53D6\u4E2D\u2026").setDisabled(true);
+            try {
+              let list;
+              if (p.mode === "webview") {
+                new Notice("\u6B63\u5728\u6253\u5F00\u5185\u5D4C\u6D4F\u89C8\u5668\u8BFB\u53D6\u4E13\u8F91\u5217\u8868\u2026", 4e3);
+                const host = await plugin.openBrowser(
+                  p,
+                  cfg.auth && cfg.auth.cookie,
+                  { autoStart: true, title: `\u6B63\u5728\u8BFB\u53D6 ${p.name} \u4E13\u8F91\u5217\u8868` }
+                );
+                if (!host) return;
+                list = await p.listCollections({ auth: cfg.auth, http: plugin.http, webviewHost: host, logger: (m) => console.log("[clipin] " + m) });
+                new Notice("\u4E13\u8F91\u8BFB\u5230\u4E86\uFF0C\u6D4F\u89C8\u5668\u7A97\u53E3\u53EF\u4EE5\u5173\u4E86", 4e3);
+              } else {
+                list = await p.listCollections({ auth: cfg.auth, http: plugin.http });
+              }
+              if (!list || !list.length) {
+                new Notice("\u6CA1\u8BFB\u5230\u4E13\u8F91\u2014\u2014\u5C06\u4FDD\u6301\u300C\u540C\u6B65\u5168\u90E8\u300D");
+                return;
+              }
+              new CollectionPickerModal(plugin.app, list, sel, async (chosen) => {
+                cfg.collections = chosen;
+                await plugin.saveSettings();
+                this.display();
+              }).open();
+            } catch (e) {
+              new Notice("\u8BFB\u53D6\u4E13\u8F91\u5931\u8D25\uFF1A" + e.message);
+            } finally {
+              b.setButtonText("\u9009\u62E9\u4E13\u8F91").setDisabled(false);
+            }
           }));
         }
         new Setting(containerEl).setName("\u3000\u7ACB\u5373\u540C\u6B65").setDesc(`\u628A ${p.name} \u7684\u6536\u85CF\u540C\u6B65\u5230${s.target.type === "notion" ? " Notion" : " Obsidian"}`).addButton((b) => b.setButtonText("\u540C\u6B65").onClick(async () => {
