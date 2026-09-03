@@ -2863,6 +2863,7 @@ function makeWebviewEl(contentEl, partitionId, src, cls) {
   const wv = document.createElement("webview");
   wv.setAttribute("partition", partitionId);
   wv.setAttribute("allowpopups", "");
+  wv.setAttribute("webpreferences", "autoplayPolicy=document-user-activation-required");
   if (cls) wv.setAttribute("class", cls);
   wv.setAttribute("src", src || "about:blank");
   contentEl.appendChild(wv);
@@ -2876,11 +2877,38 @@ function attachWebviewGuards(wv, plugin, tag) {
   const log = (m) => plugin._log("info", `[${tag}] ${m}`);
   wv.addEventListener("dom-ready", () => log(`dom-ready url=${safeUrl(wv)}`));
   wv.addEventListener("did-start-loading", () => log("did-start-loading"));
-  wv.addEventListener("did-stop-loading", () => log("did-stop-loading"));
-  wv.addEventListener("will-navigate", (e) => log(`will-navigate \u2192 ${e && e.url || ""}`));
+  wv.addEventListener("did-finish-load", () => log("did-finish-load"));
   wv.addEventListener("new-window", (e) => log(`new-window \u2192 ${e && e.url || ""}`));
   wv.addEventListener("unresponsive", () => plugin._log("error", `[${tag}] webview \u65E0\u54CD\u5E94`));
   wv.addEventListener("responsive", () => log("webview \u6062\u590D\u54CD\u5E94"));
+  let beats = 0;
+  const beat = () => {
+    beats += 1;
+    let mem = "";
+    try {
+      const m = typeof process !== "undefined" && process.memoryUsage ? process.memoryUsage() : null;
+      if (m) mem = ` rss=${Math.round((m.rss || 0) / 1048576)}MB heap=${Math.round((m.heapUsed || 0) / 1048576)}MB`;
+    } catch (_) {
+    }
+    log(`\u5B58\u6D3B ${beats}s${mem}`);
+    if (beats < 30) setTimeout(beat, 1e3);
+  };
+  wv.addEventListener("did-stop-loading", () => {
+    log("did-stop-loading");
+    if (webviewCanAccessWebContents(wv)) {
+      try {
+        const wc = wv.getWebContents();
+        if (wc && typeof wc.getProcessMemoryInfo === "function") {
+          Promise.resolve(wc.getProcessMemoryInfo()).then((info) => {
+            if (info) log(`\u5185\u5D4C\u8FDB\u7A0B\u5185\u5B58 ${Math.round((info.private || info.residentSet || 0) * 1024 / 1048576)}MB`);
+          }).catch(() => {
+          });
+        }
+      } catch (_) {
+      }
+    }
+    setTimeout(beat, 1e3);
+  });
   wv.addEventListener("render-process-gone", (e) => {
     plugin._log("error", `[${tag}] webview \u6E32\u67D3\u8FDB\u7A0B\u5D29\u6E83\uFF1A${e && e.details && e.details.reason || e && e.details || ""}`);
     new Notice("\u5185\u5D4C\u6D4F\u89C8\u5668\u5D29\u4E86\uFF08\u9875\u9762\u592A\u91CD\u6216\u5185\u5B58\u4E0D\u8DB3\uFF09\u3002\u5173\u6389\u672C\u7A97\u53E3\u91CD\u8BD5\u5373\u53EF\uFF0CObsidian \u672C\u4F53\u4E0D\u53D7\u5F71\u54CD\u3002", 8e3);
@@ -3101,9 +3129,19 @@ var ClipinPlugin = class extends Plugin {
       } catch (_) {
       }
     }
+    const priorCrashes = fs.readdirSync(partRoot).filter((n) => n.includes(".crashed-")).length;
     if (moved.length) {
-      this._log("error", `${reason}\uFF0C\u5DF2\u91CD\u7F6E\u6D4F\u89C8\u5668\u6570\u636E\uFF08${moved.join(", ")} \u2192 .crashed-${stamp}\uFF09\uFF1B\u9700\u91CD\u65B0\u767B\u5F55\u4E00\u6B21`);
-      setTimeout(() => new Notice(`Savault\uFF1A${reason}\uFF0C\u5DF2\u81EA\u52A8\u91CD\u7F6E\u5185\u5D4C\u6D4F\u89C8\u5668\u6570\u636E\uFF08\u9700\u91CD\u65B0\u767B\u5F55\u4E00\u6B21\uFF09\u3002`, 9e3), 1500);
+      this._log("error", `${reason}\uFF0C\u5DF2\u91CD\u7F6E\u6D4F\u89C8\u5668\u6570\u636E\uFF08${moved.join(", ")} \u2192 .crashed-${stamp}\uFF09\uFF1B\u9700\u91CD\u65B0\u767B\u5F55\u4E00\u6B21\uFF08\u7D2F\u8BA1\u5D29\u6E83 ${priorCrashes} \u6B21\uFF09`);
+      setTimeout(() => {
+        if (priorCrashes >= 2) {
+          new Notice(
+            "Savault\uFF1A\u5DF2\u8FDE\u7EED\u591A\u6B21\u91CD\u7F6E\u5185\u5D4C\u6D4F\u89C8\u5668\u6570\u636E\uFF0C\u4F46\u6BCF\u6B21\u52A0\u8F7D\u9875\u9762\u4ECD\u7136\u95EA\u9000 \u2014\u2014 \u8BF4\u660E\u4E0D\u662F\u7F13\u5B58\u635F\u574F\uFF0C\u800C\u662F\u5185\u5D4C\u6D4F\u89C8\u5668\u6E32\u67D3\u8BE5\u9875\u9762\u65F6\u5D29\u6E83\uFF08\u89C6\u9891\u89E3\u7801/GPU\uFF09\u3002\u8BF7\u5B8C\u5168\u9000\u51FA Obsidian\uFF0C\u7528 --disable-gpu \u53C2\u6570\u542F\u52A8\u4E00\u6B21\u505A\u5BF9\u7167\uFF08\u8BE6\u89C1\u8BBE\u7F6E \u2192 \u6545\u969C\u6392\u67E5\uFF09\u3002",
+            2e4
+          );
+        } else {
+          new Notice(`Savault\uFF1A${reason}\uFF0C\u5DF2\u81EA\u52A8\u91CD\u7F6E\u5185\u5D4C\u6D4F\u89C8\u5668\u6570\u636E\uFF08\u9700\u91CD\u65B0\u767B\u5F55\u4E00\u6B21\uFF09\u3002`, 9e3);
+        }
+      }, 1500);
     }
     return moved;
   }
@@ -3863,7 +3901,14 @@ var ClipinSettingTab = class extends PluginSettingTab {
           containerEl.createEl("p", { text: "\u26A0\uFE0F " + p.warning, cls: "clipin-warning" });
         }
         if (p.capabilities.loginUrl) {
-          new Setting(containerEl).setName("\u3000\u767B\u5F55").setDesc(loggedIn ? "\u5DF2\u4FDD\u5B58\u767B\u5F55\u6001\uFF0C\u53EF\u70B9\u6B64\u91CD\u65B0\u767B\u5F55" : "\u6253\u5F00\u5185\u5D4C\u6D4F\u89C8\u5668\u767B\u5F55\u540E\u63D0\u53D6").addButton((b) => b.setButtonText("\u767B\u5F55").setCta().onClick(() => new LoginModal(this.app, plugin, p, id === "bilibili" ? "SESSDATA" : null).open()));
+          new Setting(containerEl).setName("\u3000\u767B\u5F55").setDesc(loggedIn ? "\u5DF2\u4FDD\u5B58\u767B\u5F55\u6001\uFF0C\u53EF\u70B9\u6B64\u91CD\u65B0\u767B\u5F55\uFF1B\u53F3\u952E\u300C\u6E05\u9664\u767B\u5F55\u6001\u300D\u53EF\u4E00\u952E\u9000\u51FA" : "\u6253\u5F00\u5185\u5D4C\u6D4F\u89C8\u5668\u767B\u5F55\u540E\u63D0\u53D6").addButton((b) => b.setButtonText("\u6E05\u9664\u767B\u5F55\u6001").setWarning().onClick(async () => {
+            const moved = plugin._quarantinePartitions(`\u624B\u52A8\u6E05\u9664 ${p.name} \u767B\u5F55\u6001`);
+            cfg.auth = {};
+            cfg.userLabel = "";
+            await plugin.saveSettings();
+            this.display();
+            new Notice(moved.length ? `\u5DF2\u6E05\u9664 ${p.name} \u767B\u5F55\u6001\u4E0E\u5185\u5D4C\u6D4F\u89C8\u5668\u6570\u636E\uFF0C\u4E0B\u6B21\u540C\u6B65\u9700\u91CD\u65B0\u767B\u5F55` : `\u5DF2\u6E05\u9664 ${p.name} \u4FDD\u5B58\u7684\u767B\u5F55\u6001\uFF08\u6D4F\u89C8\u5668\u7F13\u5B58\u65E0\u6570\u636E\u6216\u6B63\u88AB\u5360\u7528\uFF0C\u8BF7\u5148\u5173\u95ED\u6240\u6709\u7A97\u53E3\uFF09`);
+          })).addButton((b) => b.setButtonText("\u767B\u5F55").setCta().onClick(() => new LoginModal(this.app, plugin, p, id === "bilibili" ? "SESSDATA" : null).open()));
         }
         for (const f of p.authFields) {
           new Setting(containerEl).setName("\u3000" + f.label).setDesc(f.help || "").addText((t) => {
@@ -3981,13 +4026,25 @@ var ClipinSettingTab = class extends PluginSettingTab {
       const moved = plugin._quarantinePartitions("\u624B\u52A8\u91CD\u7F6E");
       new Notice(moved.length ? `\u5DF2\u91CD\u7F6E\uFF08${moved.join(", ")}\uFF09\u3002\u4E0B\u6B21\u6253\u5F00\u767B\u5F55/\u540C\u6B65\u7A97\u53E3\u5C06\u4ECE\u5E72\u51C0\u72B6\u6001\u5F00\u59CB\uFF0C\u9700\u91CD\u65B0\u767B\u5F55\u4E00\u6B21` : "\u6CA1\u6709\u53EF\u91CD\u7F6E\u7684\u6D4F\u89C8\u5668\u6570\u636E\uFF08\u6216\u6587\u4EF6\u6B63\u88AB\u5360\u7528\u2014\u2014\u8BF7\u5148\u5173\u95ED\u6240\u6709\u767B\u5F55/\u540C\u6B65\u7A97\u53E3\u518D\u8BD5\uFF09");
     }));
-    new Setting(containerEl).setName("\u8BCA\u65AD\u65E5\u5FD7").setDesc("\u51FA\u9519/\u95EA\u9000\u540E\u628A\u63D2\u4EF6\u76EE\u5F55\u4E0B\u7684 sync.log \u53D1\u7ED9\u5F00\u53D1\u8005\uFF0C\u91CC\u9762\u8BB0\u5F55\u4E86\u5D29\u6E83\u524D\u6BCF\u4E00\u6B65").addButton((b) => b.setButtonText("\u6253\u5F00\u63D2\u4EF6\u76EE\u5F55").onClick(() => {
+    new Setting(containerEl).setName("\u8BCA\u65AD\u65E5\u5FD7").setDesc("\u51FA\u9519/\u95EA\u9000\u540E\u628A\u63D2\u4EF6\u76EE\u5F55\u4E0B\u7684 sync.log \u53D1\u7ED9\u5F00\u53D1\u8005\uFF0C\u91CC\u9762\u8BB0\u5F55\u4E86\u5D29\u6E83\u524D\u6BCF\u4E00\u6B65\uFF08\u542B\u6BCF\u79D2\u5185\u5B58\u5FC3\u8DF3\uFF09").addButton((b) => b.setButtonText("\u6253\u5F00\u63D2\u4EF6\u76EE\u5F55").onClick(() => {
       try {
         const path = require("path");
         const base = plugin.app.vault.adapter.getBasePath();
         require("electron").shell.openPath(path.join(base, plugin.app.vault.configDir || ".obsidian", "plugins", "savault"));
       } catch (e) {
         new Notice("\u6253\u5F00\u5931\u8D25\uFF1A" + e.message);
+      }
+    }));
+    new Setting(containerEl).setName("\u53CD\u590D\u95EA\u9000\u7684\u5BF9\u7167\u5B9E\u9A8C\uFF08--disable-gpu\uFF09").setDesc([
+      "\u5982\u679C\u91CD\u7F6E\u540E\u4ECD\u7136\u4E00\u70B9\u300C\u767B\u5F55\u300D\u5C31\u6574\u4E2A Obsidian \u95EA\u9000\uFF0C\u8BF4\u660E\u4E0D\u662F\u7F13\u5B58\u95EE\u9898\uFF0C\u800C\u662F\u6E32\u67D3\u8FDB\u7A0B\u5D29\u5728\u89C6\u9891\u89E3\u7801/GPU \u4E0A\u3002",
+      "\u505A\u6CD5\uFF1A\u5B8C\u5168\u9000\u51FA Obsidian\uFF08\u542B\u6258\u76D8\uFF09\u2192 \u5728 Obsidian \u5FEB\u6377\u65B9\u5F0F\u300C\u76EE\u6807\u300D\u672B\u5C3E\u52A0\u7A7A\u683C\u548C --disable-gpu \u2192 \u53CC\u51FB\u542F\u52A8 \u2192 \u518D\u70B9\u300C\u767B\u5F55\u300D\u3002",
+      "\u82E5\u52A0\u4E0A\u53C2\u6570\u540E\u4E0D\u95EA\u9000\uFF0C\u5C31\u662F GPU \u76F8\u5173\uFF1B\u628A\u7ED3\u679C\u544A\u8BC9\u6211\uFF0C\u6211\u6765\u505A\u65E0 GPU \u964D\u7EA7\u65B9\u6848\u3002"
+    ].join("\n")).addButton((b) => b.setButtonText("\u590D\u5236\u53C2\u6570").onClick(() => {
+      try {
+        navigator.clipboard.writeText("--disable-gpu");
+        new Notice("\u5DF2\u590D\u5236 --disable-gpu");
+      } catch (e) {
+        new Notice("\u590D\u5236\u5931\u8D25\uFF0C\u8BF7\u624B\u52A8\u8F93\u5165\uFF1A--disable-gpu");
       }
     }));
   }
