@@ -1,6 +1,10 @@
 var __getOwnPropNames = Object.getOwnPropertyNames;
 var __commonJS = (cb, mod) => function __require() {
-  return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
+  try {
+    return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
+  } catch (e) {
+    throw mod = 0, e;
+  }
 };
 
 // core/model.js
@@ -2867,6 +2871,28 @@ function makeWebviewEl(contentEl, partitionId, src, cls) {
 function webviewCanAccessWebContents(wv) {
   return !!(wv && typeof wv.getWebContents === "function");
 }
+function attachWebviewGuards(wv, plugin, tag) {
+  if (!wv || !plugin) return;
+  const log = (m) => plugin._log("info", `[${tag}] ${m}`);
+  wv.addEventListener("dom-ready", () => log(`dom-ready url=${safeUrl(wv)}`));
+  wv.addEventListener("did-start-loading", () => log("did-start-loading"));
+  wv.addEventListener("did-stop-loading", () => log("did-stop-loading"));
+  wv.addEventListener("will-navigate", (e) => log(`will-navigate \u2192 ${e && e.url || ""}`));
+  wv.addEventListener("new-window", (e) => log(`new-window \u2192 ${e && e.url || ""}`));
+  wv.addEventListener("unresponsive", () => plugin._log("error", `[${tag}] webview \u65E0\u54CD\u5E94`));
+  wv.addEventListener("responsive", () => log("webview \u6062\u590D\u54CD\u5E94"));
+  wv.addEventListener("render-process-gone", (e) => {
+    plugin._log("error", `[${tag}] webview \u6E32\u67D3\u8FDB\u7A0B\u5D29\u6E83\uFF1A${e && e.details && e.details.reason || e && e.details || ""}`);
+    new Notice("\u5185\u5D4C\u6D4F\u89C8\u5668\u5D29\u4E86\uFF08\u9875\u9762\u592A\u91CD\u6216\u5185\u5B58\u4E0D\u8DB3\uFF09\u3002\u5173\u6389\u672C\u7A97\u53E3\u91CD\u8BD5\u5373\u53EF\uFF0CObsidian \u672C\u4F53\u4E0D\u53D7\u5F71\u54CD\u3002", 8e3);
+  });
+}
+function safeUrl(wv) {
+  try {
+    return wv.getURL() || "";
+  } catch (_) {
+    return "";
+  }
+}
 var LoginModal = class extends Modal {
   /**
    * @param {App} app
@@ -2890,7 +2916,9 @@ var LoginModal = class extends Modal {
       text: "\u5728\u4E0B\u65B9\u7A97\u53E3\u4E2D\u767B\u5F55\u540E\uFF0C\u70B9\u51FB\u300C\u63D0\u53D6\u767B\u5F55\u6001\u300D\u3002",
       cls: "clipin-tip"
     });
+    this.plugin._log("info", `[login] \u6253\u5F00\u767B\u5F55\u7A97\u53E3\uFF1A${p.name} partition=persist:clipin-${p.id}`);
     this.webview = makeWebviewEl(contentEl, `persist:clipin-${p.id}`, p.capabilities.loginUrl || "about:blank", "clipin-webview");
+    attachWebviewGuards(this.webview, this.plugin, "login");
     const row = contentEl.createDiv({ cls: "clipin-btn-row" });
     const btn = row.createEl("button", { text: "\u63D0\u53D6\u767B\u5F55\u6001" });
     btn.addClass("mod-cta");
@@ -3019,17 +3047,29 @@ var ClipinPlugin = class extends Plugin {
     this.addSettingTab(this.settingTab);
     this.setupAutoSync();
     console.log("[savault] \u5DF2\u52A0\u8F7D\uFF0C\u652F\u6301\u5E73\u53F0\uFF1A" + PLATFORM_ORDER.join(", "));
+    this._log("info", `\u63D2\u4EF6\u5DF2\u52A0\u8F7D v${this.manifest && this.manifest.version || "?"}\uFF08\u540C\u6B65\u843D\u76D8\u65E5\u5FD7\u5DF2\u542F\u7528\uFF09`);
+  }
+  onUnload() {
+    this._log("info", "\u63D2\u4EF6\u5378\u8F7D\uFF08Obsidian \u5173\u95ED\u6216\u63D2\u4EF6\u88AB\u7981\u7528/\u91CD\u8F7D\uFF09");
   }
   /* ---------- 落盘日志：渲染进程 console 不进 obsidian.log，报错写 sync.log 才能排查 ---------- */
   get logFilePath() {
     const cfgDir = this.app.vault && this.app.vault.configDir || ".obsidian";
     return `${cfgDir}/plugins/savault/sync.log`;
   }
-  async _appendFileLog(text) {
+  _appendFileLog(text) {
+    try {
+      const fs = require("fs");
+      const path = require("path");
+      const a = this.app.vault.adapter;
+      const base = a && typeof a.getBasePath === "function" ? a.getBasePath() : "";
+      fs.appendFileSync(path.join(base, this.logFilePath), text);
+      return;
+    } catch (_) {
+    }
     try {
       const a = this.app.vault.adapter;
-      if (!a || typeof a.append !== "function") return;
-      await a.append(this.logFilePath, text);
+      if (a && typeof a.append === "function") a.append(this.logFilePath, text);
     } catch (_) {
     }
   }
@@ -3215,6 +3255,7 @@ var ClipinPlugin = class extends Plugin {
       return;
     }
     this._syncing = true;
+    this._log("info", `\u5F00\u59CB\u540C\u6B65 ${p.name}\uFF08${platformId}\uFF09`);
     try {
       new Notice(`\u5F00\u59CB\u540C\u6B65 ${p.name}\u2026\uFF08\u5982\u5F39\u51FA\u6D4F\u89C8\u5668\u7A97\u53E3\uFF0C\u767B\u5F55\u540E\u70B9\u300C\u5F00\u59CB\u8BFB\u53D6\u300D\uFF09`);
       const isPro = !!this.settings.licenseValid;
@@ -3556,7 +3597,9 @@ var BrowserModal = class extends Modal {
       text: this.opts.title ? "" : hasCookie ? "\u68C0\u6D4B\u5230\u8BBE\u7F6E\u91CC\u7684\u767B\u5F55\u4FE1\u606F\uFF0C\u4F1A\u81EA\u52A8\u5C1D\u8BD5\u514D\u767B\u5F55\u3002\u82E5\u7A97\u53E3\u4ECD\u662F\u767B\u5F55\u9875\uFF0C\u8BF7\u5728\u6B64\u767B\u5F55\u4E00\u6B21\uFF08\u53EA\u9700\u8FD9\u4E00\u6B21\uFF0C\u4E4B\u540E\u81EA\u52A8\u4FDD\u6301\uFF09\u3002\u786E\u8BA4\u767B\u5F55\u540E\u70B9\u300C\u5F00\u59CB\u8BFB\u53D6\u300D\u3002" : "\u6B64\u7A97\u53E3\u5C31\u662F\u6D4F\u89C8\u5668\uFF1A\u767B\u5F55\u4E00\u6B21\u540E\u70B9\u300C\u5F00\u59CB\u8BFB\u53D6\u300D\uFF1B\u767B\u5F55\u6001\u4F1A\u81EA\u52A8\u4FDD\u5B58\uFF0C\u4EE5\u540E\u4E0D\u7528\u518D\u767B\u3002",
       cls: "clipin-tip"
     });
+    this.plugin._log("info", `[browser] \u6253\u5F00\u8BFB\u53D6\u7A97\u53E3\uFF1A${p.name} partition=persist:clipin-${p.id} hasCookie=${hasCookie}`);
     this.webview = makeWebviewEl(contentEl, `persist:clipin-${p.id}`, p.capabilities && p.capabilities.loginUrl || "about:blank", "clipin-webview");
+    attachWebviewGuards(this.webview, this.plugin, "browser");
     this.webview.addEventListener("dom-ready", async () => {
       if (this.cookiesInjected) return;
       this.cookiesInjected = true;
@@ -3589,10 +3632,6 @@ var BrowserModal = class extends Modal {
           this.plugin._log("info", `\u81EA\u52A8\u6CE8\u5165 Cookie \u672A\u751F\u6548\uFF08${e.message}\uFF09\uFF0C\u8BF7\u5728\u7A97\u53E3\u4E2D\u767B\u5F55\u4E00\u6B21\u5373\u53EF`);
         }
       }
-    });
-    this.webview.addEventListener("render-process-gone", (e) => {
-      this.plugin._log("error", `webview \u5D29\u6E83\uFF1A${e && e.details && e.details.reason || e && e.details || ""}`);
-      new Notice("\u5185\u5D4C\u6D4F\u89C8\u5668\u5D29\u4E86\uFF08\u9875\u9762\u592A\u91CD\u6216\u5185\u5B58\u4E0D\u8DB3\uFF09\u3002\u5173\u6389\u672C\u7A97\u53E3\u91CD\u8BD5\u5373\u53EF\uFF0CObsidian \u672C\u4F53\u4E0D\u53D7\u5F71\u54CD\u3002", 8e3);
     });
     const row = contentEl.createDiv({ cls: "clipin-btn-row" });
     this.goBtn = row.createEl("button", { text: "\u5DF2\u767B\u5F55\uFF0C\u5F00\u59CB\u8BFB\u53D6" });
