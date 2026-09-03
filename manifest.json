@@ -3,7 +3,7 @@
   "name": "知识桥梁 Savault",
   "version": "0.4.0",
   "minAppVersion": "1.4.0",
-  "description": "把 B站 / 小红书 / 小宇宙 / X 的收藏，同步到 Obsidian 或 Notion",
+  "description": "把小红书 / B站 的收藏，同步到 Obsidian 或 Notion",
   "author": "aiprice",
   "authorUrl": "https://product.aiprice.store/clipin",
   "isDesktopOnly": true

@@ -1,6 +1,6 @@
 # 知识桥梁 Savault
 
-把你自己的收藏同步成知识库笔记：B站 / 小红书 / 小宇宙 / X → Obsidian / Notion，四个平台、两个终点，共用一份引擎。
+把你自己的收藏同步成知识库笔记：小红书 / B站 → Obsidian / Notion，两个平台、两个终点，共用一份引擎。
 
 - 官网与下载：https://product.aiprice.store/clipin/
 - 免费版：50 条同步额度（元数据 + 封面本地化 + frontmatter + 增量同步）
@@ -12,7 +12,7 @@
 1. 下载 [最新 Release](https://github.com/lin113311221/savault-plugin/releases) 里的 `savault.zip`
 2. 在你的 Vault 下新建 `.obsidian/plugins/savault/` 目录，把 zip 里的 `main.js` / `manifest.json` / `styles.css` 解压进去
 3. Obsidian → 设置 → 第三方插件 → 关闭安全模式 → 刷新 → 启用「知识桥梁 Savault」
-4. 插件设置里配置平台凭证（B站 SESSDATA / 小红书与 X 内嵌登录 / 小宇宙 refresh_token）与目标端
+4. 插件设置里配置平台凭证（B站 SESSDATA / 小红书内嵌登录）与目标端
 
 > 从旧版 Bili2Obsidian 升级：旧目录 `.obsidian/plugins/bili2obsidian/` 里的设置（含授权码）会在新版首次启动时自动迁移，旧目录保留不删。
 
