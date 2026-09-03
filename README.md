@@ -1,17 +1,20 @@
-# Bili2Obsidian
+# 知识桥梁 Savault
 
-把你自己的 B站收藏夹同步为 Obsidian 本地 Markdown 笔记。
+把你自己的收藏同步成知识库笔记：B站 / 小红书 / 小宇宙 / X → Obsidian / Notion，四个平台、两个终点，共用一份引擎。
 
-- 官网与定价：https://product.aiprice.store/bili
-- 免费版：20 条同步额度（元数据 + 封面本地化 + frontmatter + 增量同步）
-- 永久版 ¥99 买断：无限同步 + 逐字稿（字幕/AI 字幕）+ AI 总结（BYOK 已上线）
+- 官网与下载：https://product.aiprice.store/clipin/
+- 免费版：50 条同步额度（元数据 + 封面本地化 + frontmatter + 增量同步）
+- 全功能码（内测期免费领，正式版 ¥99 买断）：无限同步 + 问收藏（AI 对话收藏库，BYOK）+ 逐字稿 + AI 总结
+- 老用户：旧 `B2O-` / `CLP-` 授权码继续有效；从 bili2obsidian 旧版升级时设置会自动迁移
 
 ## 安装
 
-1. 下载 [最新 Release](https://github.com/lin113311221/bili2obsidian-plugin/releases) 里的 `bili2obsidian.zip` 并解压
-2. 把解压出的 `bili2obsidian` 文件夹（含 main.js / manifest.json / styles.css）放到 `<你的Vault>/.obsidian/plugins/` 下
-3. Obsidian → 设置 → 第三方插件 → 关闭安全模式 → 启用 Bili2Obsidian
-4. 插件设置里点「内嵌登录提取」登录 B站，或手动粘贴 SESSDATA
+1. 下载 [最新 Release](https://github.com/lin113311221/savault-plugin/releases) 里的 `savault.zip`
+2. 在你的 Vault 下新建 `.obsidian/plugins/savault/` 目录，把 zip 里的 `main.js` / `manifest.json` / `styles.css` 解压进去
+3. Obsidian → 设置 → 第三方插件 → 关闭安全模式 → 刷新 → 启用「知识桥梁 Savault」
+4. 插件设置里配置平台凭证（B站 SESSDATA / 小红书与 X 内嵌登录 / 小宇宙 refresh_token）与目标端
+
+> 从旧版 Bili2Obsidian 升级：旧目录 `.obsidian/plugins/bili2obsidian/` 里的设置（含授权码）会在新版首次启动时自动迁移，旧目录保留不删。
 
 ## 合规说明
 

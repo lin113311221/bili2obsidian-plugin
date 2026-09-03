@@ -1,10 +1,10 @@
 {
-  "id": "bili2obsidian",
-  "name": "Bili2Obsidian",
-  "version": "0.2.1",
+  "id": "savault",
+  "name": "知识桥梁 Savault",
+  "version": "0.4.0",
   "minAppVersion": "1.4.0",
-  "description": "将 B 站收藏夹同步为 Obsidian Markdown 笔记（含封面本地化与增量去重）",
-  "author": "bili2obsidian",
-  "authorUrl": "",
+  "description": "把 B站 / 小红书 / 小宇宙 / X 的收藏，同步到 Obsidian 或 Notion",
+  "author": "aiprice",
+  "authorUrl": "https://product.aiprice.store/clipin",
   "isDesktopOnly": true
 }
