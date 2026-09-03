@@ -5195,6 +5195,7 @@ function attachWebviewGuards(wv, plugin, tag) {
   wv.addEventListener("did-start-loading", () => log("did-start-loading"));
   wv.addEventListener("did-finish-load", () => log("did-finish-load"));
   wv.addEventListener("new-window", (e) => log(`new-window \u2192 ${e && e.url || ""}`));
+  wv.addEventListener("will-navigate", (e) => log(`will-navigate \u2192 ${e && e.url || ""}`));
   wv.addEventListener("unresponsive", () => plugin._log("error", `[${tag}] webview \u65E0\u54CD\u5E94`));
   wv.addEventListener("responsive", () => log("webview \u6062\u590D\u54CD\u5E94"));
   let beats = 0;
@@ -5492,6 +5493,7 @@ var QrLoginModal = class extends Modal {
 var ClipinPlugin = class extends Plugin {
   async onload() {
     this._probeEnv();
+    this._registerExitMarker();
     this._crashedLastRun = this._recoverCrashedPartitions();
     await this.migrateLegacySettings();
     await this.loadSettings();
@@ -5551,15 +5553,61 @@ var ClipinPlugin = class extends Plugin {
     this._log("info", `\u63D2\u4EF6\u5DF2\u52A0\u8F7D v${this.manifest && this.manifest.version || "?"}\uFF08\u540C\u6B65\u843D\u76D8\u65E5\u5FD7\u5DF2\u542F\u7528\uFF09`);
   }
   onUnload() {
-    this._log("info", "\u63D2\u4EF6\u5378\u8F7D\uFF08Obsidian \u5173\u95ED\u6216\u63D2\u4EF6\u88AB\u7981\u7528/\u91CD\u8F7D\uFF09");
+    this._markCleanExit("Obsidian \u5173\u95ED\u6216\u63D2\u4EF6\u88AB\u7981\u7528/\u91CD\u8F7D");
   }
   /**
-   * 崩溃自愈（v0.5.11）：上一次运行「插件已加载」之后没有「插件卸载」，且最后一行
-   * 是内嵌浏览器/同步活动 → 进程是死在内嵌浏览器使用中途的，persist:clipin-* 分区
-   * 的 SQLite（Cookies/Local Storage）很可能处于写一半的损坏状态——不清理的话
-   * 下次再开 webview 会一加载就崩，形成崩溃循环（2026-09-03 真机两次闪退的教训）。
-   * 处理：把 clipin-* 分区目录改名隔离（不删，留底可查），下次 webview 从干净状态重建。
-   * 注意必须在 onload 最前面跑——此时还没创建任何 webview，分区文件无锁。
+   * 干净退出标记（v0.5.22）。
+   *
+   * 背景（血泪）：v0.5.11 起的崩溃检测靠「上次没有『插件卸载』日志」推断崩溃。
+   * 但 Windows 上 Obsidian 退出时 renderer 进程常被直接终止，onUnload 根本来不及跑
+   * —— 真机 sync.log 里 11 次「插件已加载」对 0 次「插件卸载」，检测器**恒为真**。
+   * 后果：每次重启都被判崩溃 → 隔离分区（用户每次都要重新登录）+ 自动降一档
+   * （一路降到 L5 离屏，登录窗一片空白）。所谓「连崩 8 次」里，绝大部分是这么造出来的。
+   *
+   * 修法两步：① 给正常退出多留几个落点（提高分辨力）；② 判定必须有正向崩溃信号。
+   */
+  _registerExitMarker() {
+    if (typeof window === "undefined" || this._exitMarkerRegistered) return;
+    this._exitMarkerRegistered = true;
+    const onBeforeUnload = () => this._markCleanExit("\u7A97\u53E3\u5173\u95ED\u524D\u6807\u8BB0\uFF08beforeunload\uFF09");
+    const onPageHide = () => this._markCleanExit("\u9875\u9762\u9690\u85CF\uFF08pagehide\uFF09");
+    window.addEventListener("beforeunload", onBeforeUnload);
+    window.addEventListener("pagehide", onPageHide);
+    this.register(() => {
+      try {
+        window.removeEventListener("beforeunload", onBeforeUnload);
+        window.removeEventListener("pagehide", onPageHide);
+      } catch (_) {
+      }
+    });
+  }
+  /** 写一次「我是正常退出的」。日志是同步 appendFileSync，进程被收尾前也来得及落盘。 */
+  _markCleanExit(why) {
+    if (this._cleanExitMarked) return;
+    this._cleanExitMarked = true;
+    try {
+      this._log("info", `\u63D2\u4EF6\u5378\u8F7D\uFF08${why}\uFF09`);
+    } catch (_) {
+    }
+  }
+  /**
+   * 崩溃自愈（v0.5.11 引入，v0.5.22 重写判定逻辑）。
+   *
+   * 作用：确认上次是崩在内嵌浏览器上时，把 persist:clipin-* 分区改名隔离
+   * （不删，留底可查），下次 webview 从干净状态重建——避免分区 SQLite 写一半
+   * 损坏后「一加载就崩」的崩溃循环。必须在 onload 最前面跑（此时分区文件无锁）。
+   *
+   * ⚠️ v0.5.22 重写的原因：旧判定「上次没有『插件卸载』日志 = 崩了」在 Windows 上
+   * **恒为真**。Obsidian 退出时 renderer 进程常被直接终止，onUnload 来不及执行。
+   * 真机 sync.log 实证：11 次「插件已加载」对 0 次「插件卸载」。
+   * 于是每重启一次就误判一次崩溃 → 隔离分区（登录态被抹）+ 自动降一档
+   * （一路降到 L5 离屏，登录窗一片空白）。所谓「连崩 8 次」，绝大部分是这么造出来的。
+   *
+   * 新判定：**必须有正向崩溃信号**（Chromium 自己上报的），没信号就当「原因不明」，
+   * 不动登录态、不降档。宁可漏判——漏判最多偶发分区损坏（设置里有手动重置按钮），
+   * 误判则是每次重启都把用户的登录态抹掉，代价不可比。
+   *
+   * @returns {boolean|null} true=确认真崩（会隔离分区+触发降档）；false=非正常退出但无崩溃信号；null=正常退出或无日志
    */
   _recoverCrashedPartitions() {
     try {
@@ -5568,17 +5616,25 @@ var ClipinPlugin = class extends Plugin {
       const a = this.app.vault.adapter;
       const base = a && typeof a.getBasePath === "function" ? a.getBasePath() : "";
       const logPath = path.join(base, this.logFilePath);
-      if (!fs.existsSync(logPath)) return;
+      if (!fs.existsSync(logPath)) return null;
       const lines = fs.readFileSync(logPath, "utf8").slice(-2e4).split("\n").filter(Boolean);
-      const WEBVIEW_RE = /打开登录窗口|打开读取窗口|did-start-loading|dom-ready|will-navigate|\[webview\]|\[login\]|\[browser\]/;
-      let lastWebviewIdx = -1, lastUnloadIdx = -1;
+      let lastLoadIdx = -1;
       for (let i = lines.length - 1; i >= 0; i--) {
-        if (lastUnloadIdx < 0 && lines[i].includes("\u63D2\u4EF6\u5378\u8F7D")) lastUnloadIdx = i;
-        if (lastWebviewIdx < 0 && WEBVIEW_RE.test(lines[i])) lastWebviewIdx = i;
-        if (lastUnloadIdx >= 0 && lastWebviewIdx >= 0) break;
+        if (lines[i].includes("\u63D2\u4EF6\u5DF2\u52A0\u8F7D")) {
+          lastLoadIdx = i;
+          break;
+        }
       }
-      if (lastWebviewIdx < 0 || lastWebviewIdx < lastUnloadIdx) return null;
-      this._quarantinePartitions("\u68C0\u6D4B\u5230\u4E0A\u6B21\u5728\u5185\u5D4C\u6D4F\u89C8\u5668\u4F7F\u7528\u4E2D\u5F02\u5E38\u9000\u51FA");
+      if (lastLoadIdx < 0) return null;
+      const lastRun = lines.slice(lastLoadIdx + 1);
+      if (lastRun.some((l) => l.includes("\u63D2\u4EF6\u5378\u8F7D"))) return null;
+      const CRASH_RE = /渲染进程崩溃|render-process-gone|out of memory|FATAL ERROR/i;
+      const crashLine = lastRun.filter((l) => CRASH_RE.test(l)).pop() || "";
+      if (!crashLine) {
+        this._log("info", "[webview] \u4E0A\u6B21\u662F\u975E\u6B63\u5E38\u9000\u51FA\uFF08\u6CA1\u7559\u4E0B\u5E72\u51C0\u5378\u8F7D\u8BB0\u5F55\uFF09\uFF0C\u4F46\u5185\u5D4C\u6D4F\u89C8\u5668\u6CA1\u6709\u4E0A\u62A5\u5D29\u6E83 \u2192 \u6309\u300C\u539F\u56E0\u4E0D\u660E\u300D\u5904\u7406\uFF1A\u4FDD\u7559\u767B\u5F55\u6001\u3001\u4E0D\u964D\u6863\u3002\u82E5\u786E\u5B9E\u611F\u89C9\u95EA\u9000\uFF0C\u5728\u8BBE\u7F6E\u91CC\u70B9\u4E00\u6B21\u300C\u91CD\u7F6E\u6D4F\u89C8\u5668\u6570\u636E\u300D\u5373\u53EF\u3002");
+        return false;
+      }
+      this._quarantinePartitions(`\u68C0\u6D4B\u5230\u5185\u5D4C\u6D4F\u89C8\u5668\u5D29\u6E83\uFF08${crashLine.replace(/^\[[^\]]*\]\s*/, "").slice(0, 120)}\uFF09`);
       return true;
     } catch (_) {
       return null;
