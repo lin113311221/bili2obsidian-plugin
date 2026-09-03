@@ -1,67 +1,49 @@
-/* Bili2Obsidian 插件样式 */
+/* 知识桥梁 Savault 插件样式 */
 
-/* 登录辅助弹窗：限宽限高，webview 占满 */
-.bili2obsidian-login-modal {
-  min-width: 60vw;
+/* 登录 / 取数弹窗：要够大，小红书登录二维码得能扫 */
+.clipin-login-modal,
+.clipin-browser-modal {
+  width: 78vw;
+  max-width: 1100px;
+  min-width: 640px;
 }
 
-.bili2obsidian-login-modal .bili2obsidian-tip {
+.clipin-tip {
   color: var(--text-muted);
   margin-top: 0;
 }
 
-/* 内嵌 B 站登录窗口 */
-.bili2obsidian-webview {
+/* 内嵌浏览器窗口 */
+.clipin-webview {
   width: 100%;
-  height: 60vh;
+  height: 72vh;
+  min-height: 480px;
   border: 1px solid var(--background-modifier-border);
-  border-radius: 6px;
+  border-radius: 8px;
+  background: var(--background-secondary);
 }
 
 /* 弹窗底部按钮行 */
-.bili2obsidian-btn-row {
+.clipin-btn-row {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
   margin-top: 12px;
 }
 
-/* 收藏夹选择弹窗 */
-.bili2obsidian-folder-list {
-  max-height: 50vh;
-  overflow-y: auto;
-  border: 1px solid var(--background-modifier-border);
-  border-radius: 8px;
-  padding: 8px 12px;
-  margin-top: 8px;
-}
-.bili2obsidian-folder-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 6px 0;
-}
-.bili2obsidian-folder-row input[type="checkbox"] {
-  margin: 0;
+/* 设置页 */
+.clipin-settings h2 {
+  margin-top: 22px;
 }
 
-/* 版本状态区 */
-.bili2obsidian-version {
-  border: 1px solid var(--background-modifier-border);
-  border-radius: 8px;
-  padding: 10px 14px;
-  margin-bottom: 16px;
-  background: var(--background-secondary);
+.clipin-warning {
+  color: var(--text-warning);
   font-size: 13px;
+  border-left: 2px solid var(--text-warning);
+  padding-left: 8px;
 }
-.bili2obsidian-version p {
-  margin: 2px 0;
-}
-.bili2obsidian-version .bili2obsidian-pro {
+
+.clipin-pro {
   color: var(--color-green);
   font-weight: 600;
 }
-.bili2obsidian-version .bili2obsidian-tip {
-  color: var(--text-muted);
-}
-

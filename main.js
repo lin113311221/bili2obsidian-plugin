@@ -3053,7 +3053,7 @@ var ClipinPlugin = class extends Plugin {
           dirTemplate: this.settings.target.obsidian.dirTemplate,
           linkAuthor: this.settings.target.obsidian.linkAuthor
         },
-        webviewHost: platformId === "xiaohongshu" || platformId === "twitter" ? await this.openBrowser(p) : void 0,
+        webviewHost: platformId === "xiaohongshu" || platformId === "twitter" ? await this.openBrowser(p, cfg.auth && cfg.auth.cookie) : void 0,
         onProgress: (s) => {
           if (s && s.message) new Notice(s.message, 2e3);
         },
@@ -3096,9 +3096,9 @@ var ClipinPlugin = class extends Plugin {
    * 打开内嵌浏览器（webview 平台用）。
    * 返回一个 Promise，在用户关闭浏览器时用 webview host 兑现。
    */
-  openBrowser(provider) {
+  openBrowser(provider, authCookie) {
     return new Promise((resolve) => {
-      const modal = new BrowserModal(this.app, provider, resolve);
+      const modal = new BrowserModal(this.app, provider, resolve, authCookie);
       modal.open();
     });
   }
@@ -3343,11 +3343,13 @@ function injectChatStyle() {
   document.head.appendChild(el);
 }
 var BrowserModal = class extends Modal {
-  constructor(app, provider, resolveHost) {
+  constructor(app, provider, resolveHost, authCookie) {
     super(app);
     this.provider = provider;
     this.resolveHost = resolveHost;
+    this.authCookie = authCookie || "";
     this.closed = false;
+    this.cookiesInjected = false;
   }
   onOpen() {
     const { contentEl } = this;
@@ -3356,7 +3358,7 @@ var BrowserModal = class extends Modal {
     contentEl.addClass("clipin-browser-modal");
     contentEl.createEl("h3", { text: `\u6B63\u5728\u8BFB\u53D6 ${p.name} \u6536\u85CF` });
     contentEl.createEl("p", {
-      text: "\u4FDD\u6301\u6B64\u7A97\u53E3\u6253\u5F00\uFF0C\u63D2\u4EF6\u4F1A\u81EA\u52A8\u6EDA\u52A8\u52A0\u8F7D\u3002\u5982\u672A\u767B\u5F55\u8BF7\u5148\u767B\u5F55\uFF0C\u767B\u5F55\u540E\u70B9\u300C\u5DF2\u767B\u5F55\uFF0C\u5F00\u59CB\u8BFB\u53D6\u300D\u3002",
+      text: this.authCookie ? "\u5DF2\u7528\u8BBE\u7F6E\u91CC\u7684 Cookie \u81EA\u52A8\u767B\u5F55\u3002\u786E\u8BA4\u9875\u9762\u662F\u767B\u5F55\u72B6\u6001\u540E\u70B9\u300C\u5F00\u59CB\u8BFB\u53D6\u300D\u3002" : "\u4FDD\u6301\u6B64\u7A97\u53E3\u6253\u5F00\uFF0C\u63D2\u4EF6\u4F1A\u81EA\u52A8\u6EDA\u52A8\u52A0\u8F7D\u3002\u5982\u672A\u767B\u5F55\u8BF7\u5148\u767B\u5F55\uFF0C\u767B\u5F55\u540E\u70B9\u300C\u5DF2\u767B\u5F55\uFF0C\u5F00\u59CB\u8BFB\u53D6\u300D\u3002",
       cls: "clipin-tip"
     });
     this.webview = contentEl.createEl("webview");
@@ -3364,8 +3366,40 @@ var BrowserModal = class extends Modal {
     this.webview.setAttribute("allowpopups", "");
     this.webview.setAttribute("partition", `persist:clipin-${p.id}`);
     this.webview.addClass("clipin-webview");
+    this.webview.addEventListener("dom-ready", async () => {
+      if (this.cookiesInjected) return;
+      this.cookiesInjected = true;
+      const cookieStr = (this.authCookie || "").trim();
+      if (!cookieStr) return;
+      try {
+        const ses = this.webview.getWebContents().session;
+        const host = new URL(this.webview.getURL() || p.capabilities.loginUrl).hostname;
+        const rootDomain = host.split(".").slice(-2).join(".");
+        const pairs = cookieStr.split(";").map((x) => x.trim()).filter((x) => x.includes("="));
+        for (const pair of pairs) {
+          const eq = pair.indexOf("=");
+          const name = pair.slice(0, eq).trim();
+          const value = pair.slice(eq + 1).trim();
+          if (!name) continue;
+          await ses.cookies.set({
+            url: "https://" + rootDomain,
+            domain: "." + rootDomain,
+            name,
+            value
+          });
+        }
+        console.log(`[savault] \u5DF2\u6CE8\u5165 ${pairs.length} \u6761 cookie \u5230 persist:clipin-${p.id}`);
+        this.webview.reload();
+      } catch (e) {
+        console.warn("[savault] cookie \u6CE8\u5165\u5931\u8D25\uFF0C\u9000\u56DE\u624B\u52A8\u767B\u5F55\uFF1A", e);
+      }
+    });
+    this.webview.addEventListener("render-process-gone", (e) => {
+      console.error("[savault] webview \u5D29\u6E83\uFF1A", e && e.details);
+      new Notice("\u5185\u5D4C\u6D4F\u89C8\u5668\u5D29\u4E86\uFF08\u9875\u9762\u592A\u91CD\u6216\u5185\u5B58\u4E0D\u8DB3\uFF09\u3002\u5173\u6389\u672C\u7A97\u53E3\u91CD\u8BD5\u5373\u53EF\uFF0CObsidian \u672C\u4F53\u4E0D\u53D7\u5F71\u54CD\u3002", 8e3);
+    });
     const row = contentEl.createDiv({ cls: "clipin-btn-row" });
-    const go = row.createEl("button", { text: "\u5DF2\u767B\u5F55\uFF0C\u5F00\u59CB\u8BFB\u53D6" });
+    const go = row.createEl("button", { text: this.authCookie ? "\u5F00\u59CB\u8BFB\u53D6" : "\u5DF2\u767B\u5F55\uFF0C\u5F00\u59CB\u8BFB\u53D6" });
     go.addClass("mod-cta");
     go.onclick = () => {
       go.setText("\u8BFB\u53D6\u4E2D\u2026");
@@ -3398,7 +3432,7 @@ var ClipinSettingTab = class extends PluginSettingTab {
     const s = plugin.settings;
     containerEl.empty();
     containerEl.addClass("clipin-settings");
-    containerEl.createEl("h2", { text: "\u77E5\u8BC6\u6865\u6881 Knowledge Bridge" });
+    containerEl.createEl("h2", { text: "\u77E5\u8BC6\u6865\u6881 Savault" });
     const pro = !!s.licenseValid;
     if (pro) {
       containerEl.createEl("p", { text: "\u2705 \u6C38\u4E45\u7248\u5DF2\u6FC0\u6D3B\uFF1A\u5168\u5E73\u53F0\u65E0\u9650\u540C\u6B65 + \u9010\u5B57\u7A3F + AI \u603B\u7ED3", cls: "clipin-pro" });
