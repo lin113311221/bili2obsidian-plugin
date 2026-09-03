@@ -675,7 +675,7 @@ var require_transcript = __commonJS({
       if (!videoUrl) throw new Error("\u6CA1\u6709\u53EF\u8F6C\u5199\u7684\u89C6\u9891\u5730\u5740");
       const model = o.model || DEFAULT_MODEL;
       const pollMs = o.pollMs || 3e3;
-      const maxWaitMs = o.maxWaitMs || 12e4;
+      const maxWaitMs = o.maxWaitMs || 3e5;
       const authHeaders = { "Authorization": "Bearer " + apiKey };
       const sub = await http.json(SUBMIT_URL, {
         method: "POST",
@@ -690,11 +690,16 @@ var require_transcript = __commonJS({
       if (!taskId) throw new Error("dashscope \u672A\u8FD4\u56DE task_id\uFF1A" + JSON.stringify(sub).slice(0, 200));
       log("[asr] \u4EFB\u52A1\u5DF2\u63D0\u4EA4 " + taskId);
       const deadline = Date.now() + maxWaitMs;
+      let lastSt = "";
       for (; ; ) {
         if (Date.now() > deadline) throw new Error("\u8F6C\u5199\u8D85\u65F6\uFF08" + Math.round(maxWaitMs / 1e3) + "s\uFF09");
         await sleep(pollMs);
         const t = await http.json(TASK_URL + taskId, { headers: authHeaders });
         const st = t && t.output && t.output.task_status;
+        if (st !== lastSt) {
+          log("[asr] \u4EFB\u52A1\u72B6\u6001\uFF1A" + st);
+          lastSt = st;
+        }
         if (st === "SUCCEEDED") {
           const results = t.output && t.output.results || [];
           const tu = results[0] && results[0].transcription_url;
