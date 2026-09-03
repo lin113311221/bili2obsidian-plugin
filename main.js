@@ -1296,10 +1296,11 @@ var require_xiaohongshu = __commonJS({
         transcript: true,
         // 视频笔记口播走 dashscope ASR（engine 富化阶段，见 core/transcript.js）
         media: true,
-        loginUrl: WEB,
-        // 轻量登录页（v0.5.15）：explore 是满屏视频的瀑布流，正是拖垮内嵌浏览器的元凶。
-        // 登录只需要拿到 cookie，用这个纯登录页可以完全避开视频流；配合自动检测，
-        // 页面还没来得及跳转回 explore 就已经提取完并关窗了。
+        loginUrl: WEB + "/explore",
+        // v0.5.20：与竞品 xhs2obsidian 完全一致（login-modal.ts:8）
+        // 轻量登录页：只作为 L4/L5 崩溃降级档的退路保留。
+        // ⚠️ v0.5.15 时我们以为「explore 满屏视频是崩溃元凶」才加的它——该假设已被证伪
+        // （真凶是 webview 上的 border-radius；竞品加载 /explore 从不崩），默认档不再使用。
         liteLoginUrl: WEB + "/login"
       },
       /**
@@ -1336,6 +1337,33 @@ var require_xiaohongshu = __commonJS({
           return { ok: false, message: "\u7F3A\u5C11\u7528\u6237 ID\uFF0C\u8BF7\u91CD\u65B0\u767B\u5F55\u5C0F\u7EA2\u4E66" };
         }
         return { ok: true, user: auth.nickname || "", userId: auth.userId };
+      },
+      /**
+       * 登录态验证 + 取用户信息（v0.5.20，对齐竞品 xhs2obsidian login-modal.ts:145-161）。
+       *
+       * 关键情报：/v2/user/me 不需要 x-s 签名，带完整 Cookie 裸调即可 ——
+       * 这是拿 userId 的**可靠**途径。别再从 cookie 名里猜（cookie 里根本没有 userId），
+       * 也别 executeJavaScript 读 location.href（跨进程操作 guest，崩溃嫌疑人）。
+       *
+       * @param {Function} request core/http 适配后的请求函数（url, opts）=> {status, headers, json}
+       * @param {string} cookie 完整 Cookie 字符串（含 a1、web_session）
+       * @returns {Promise<{userId:string, nickname:string}|null>} 未登录/验证失败返回 null
+       */
+      async fetchMe(request, cookie) {
+        const res = await request("https://edith.xiaohongshu.com/api/sns/web/v2/user/me", {
+          method: "GET",
+          headers: {
+            "Content-Type": "application/json",
+            "Origin": WEB,
+            "Referer": WEB + "/",
+            // 与内嵌浏览器的 UA 保持一致（Mac + 钉死 Chrome 120），避免设备指纹漂移
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Cookie": cookie
+          }
+        });
+        const d = res && res.json && res.json.data;
+        if (!d || !d.user_id) return null;
+        return { userId: d.user_id, nickname: d.nickname || "" };
       },
       /**
        * webview 拦截取数。
@@ -5088,7 +5116,11 @@ var WEBVIEW_PROFILES = [
   { name: "L0-\u5B8C\u6574", ua: true, preload: true, webprefs: true, allowpopups: true, liteUrl: false },
   { name: "L1-\u65E0\u6269\u5C55\u9879", ua: true, preload: true, webprefs: false, allowpopups: false, liteUrl: false },
   { name: "L2-\u65E0preload", ua: true, preload: false, webprefs: false, allowpopups: false, liteUrl: true },
-  { name: "L3-\u7ADE\u54C1\u5BF9\u9F50", ua: true, preload: true, webprefs: false, allowpopups: false, liteUrl: true },
+  // L3 竞品复刻：与 xhs2obsidian 完全一致 —— Mac UA + preload + 加载 /explore。
+  // v0.5.20 起不再用 liteUrl：「登录页更轻所以不崩」的假设已被证伪
+  // （真凶是 webview 上的 border-radius，跟页面内容无关），
+  // 而竞品恰恰加载满屏视频的 /explore 都不崩 —— 那就跟它保持一模一样。
+  { name: "L3-\u7ADE\u54C1\u590D\u523B", ua: true, preload: true, webprefs: false, allowpopups: false, liteUrl: false },
   { name: "L4-\u88F8\u5954", ua: false, preload: false, webprefs: false, allowpopups: false, liteUrl: true },
   // L5 离屏：webview 缩到 1×1 并移出视口（竞品 xhs2obsidian 的签名 webview 就是这么做的，
   // sign-manager.ts:54-72 —— 1x1 + left:-9999px）。不参与布局合成，渲染与 GPU 压力骤减。
@@ -5303,7 +5335,6 @@ var LoginModal = class extends Modal {
       }
       const all = r.cookies || [];
       let value = "";
-      let userId = "";
       if (p.id === "bilibili") {
         const hit = all.find((c) => c.name === "SESSDATA" && c.value);
         if (!hit) throw new Error("\u672A\u627E\u5230 SESSDATA\uFF0C\u8BF7\u786E\u8BA4\u5DF2\u5728\u4E0A\u65B9\u7A97\u53E3\u767B\u5F55");
@@ -5311,26 +5342,29 @@ var LoginModal = class extends Modal {
       } else {
         value = all.map((c) => `${c.name}=${c.value}`).join("; ");
         if (!value) throw new Error("\u672A\u8BFB\u5230 Cookie\uFF0C\u8BF7\u786E\u8BA4\u5DF2\u767B\u5F55");
-        if (p.id === "xiaohongshu") {
-          const realUid = all.find((c) => /^(userid|uid|user_id)$/i.test(c.name) && /^[a-f0-9]{16,32}$/i.test(c.value || ""));
-          if (realUid) userId = realUid.value;
-        }
       }
       const cfg = this.plugin.settings.platforms[p.id];
       if (p.id === "bilibili") cfg.auth.sessdata = value;
       else {
         cfg.auth.cookie = value;
         if (p.id === "xiaohongshu") {
+          const a1 = (all.find((c) => c.name === "a1") || {}).value || "";
+          if (a1) cfg.auth.a1 = a1;
           try {
-            const href = await this.webview.executeJavaScript("location.href");
-            const m = /\/user\/profile\/([a-f0-9]{16,32})/i.exec(href || "");
-            if (m) userId = m[1];
+            let me = await p.fetchMe(makeRequest(), value);
+            if (!me) {
+              await new Promise((res2) => setTimeout(res2, 2e3));
+              me = await p.fetchMe(makeRequest(), value);
+            }
+            if (me) {
+              cfg.auth.userId = me.userId;
+              if (me.nickname) cfg.auth.nickname = me.nickname;
+            } else {
+              new Notice(`${p.name} \u5DF2\u4FDD\u5B58 Cookie\uFF0C\u4F46\u9A8C\u8BC1\u767B\u5F55\u6001\u5931\u8D25\u2014\u2014\u8BF7\u786E\u8BA4\u5DF2\u5B8C\u6210\u626B\u7801\u767B\u5F55\uFF0C\u518D\u70B9\u4E00\u6B21\u300C\u63D0\u53D6\u767B\u5F55\u6001\u300D`, 6e3);
+            }
           } catch (_) {
-          }
-          if (!userId) {
             new Notice(`${p.name} \u5DF2\u4FDD\u5B58 Cookie\uFF0C\u4F46\u81EA\u52A8\u8BC6\u522B\u7528\u6237 ID \u5931\u8D25\u2014\u2014\u8BF7\u624B\u52A8\u5728\u8BBE\u7F6E\u9875\u586B userId`, 6e3);
           }
-          if (userId) cfg.auth.userId = userId;
         }
       }
       cfg.enabled = true;
@@ -5405,7 +5439,8 @@ var QrLoginModal = class extends Modal {
     this.setStatus("\u6B63\u5728\u751F\u6210\u4E8C\u7EF4\u7801\u2026");
     if (this.qrEl) this.qrEl.empty();
     try {
-      const { key, url, jar } = await p.qrLogin.createKey(requestUrl);
+      const request = makeRequest();
+      const { key, url, jar } = await p.qrLogin.createKey(request);
       this.key = key;
       this.jar = jar;
       if (this.qrEl) this.qrEl.innerHTML = qrcode.toSvg(qrcode.encode(url), 7);
@@ -5426,7 +5461,7 @@ var QrLoginModal = class extends Modal {
         return;
       }
       try {
-        const r = await p.qrLogin.poll(requestUrl, this.key, this.jar);
+        const r = await p.qrLogin.poll(makeRequest(), this.key, this.jar);
         if (r.jar) this.jar = r.jar;
         if (r.state === "waiting") {
           this.setStatus("\u5DF2\u626B\u7801\uFF0C\u8BF7\u5728\u624B\u673A\u4E0A\u70B9\u300C\u786E\u8BA4\u767B\u5F55\u300D");
