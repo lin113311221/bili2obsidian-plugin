@@ -1,16 +1,54 @@
 /* 知识桥梁 Savault 插件样式 */
 
-/* 登录 / 取数弹窗：要够大，小红书登录二维码得能扫 */
-.clipin-login-modal,
-.clipin-browser-modal {
-  width: 78vw;
-  max-width: 1080px;       /* 留点余量，避免按钮被裁 */
-  min-width: 560px;
+/* ── 弹窗定位：锚在左下角，尺寸相对「Obsidian 窗口」而不是视口 ──────────────
+
+   为什么放弃 Obsidian 默认的居中：
+   1) Obsidian 的 .modal 限高用的是 `--dialog-max-height: 85vh`，**vh 是视口单位**；
+      而弹窗容器 .modal-container（top:0;bottom:0）铺满的是 **Obsidian 窗口**。
+      窗口没最大化时 85vh 会远高于窗口高度 → 弹窗底部（按钮行）被推出窗口外，
+      看不见也点不到。内嵌浏览器这种高内容弹窗必踩。
+   2) 居中弹窗的左上角位置随内容高度浮动，内容一变眼睛就得重新找。
+      左下角锚定后左上角**固定**，内容只朝右下扩展，位置永远可预期。
+
+   尺寸一律用百分比（相对 .modal-container = 窗口），不再用 vw/vh。 */
+.modal-container.clipin-anchor-bl {
+  align-items: flex-end;
+  justify-content: flex-start;
+}
+/* 宽度不写死：沿用 Obsidian 的 --dialog-width（560px），用户换主题/改设置时跟着变；
+   只有内嵌浏览器那类弹窗才在下面单独加宽。
+   用 margin 而不是给容器加 padding：.modal-bg 是 position:absolute 铺满的，
+   给容器加 padding 会让遮罩跟着缩水、四周漏光。 */
+.modal-container.clipin-anchor-bl > .modal {
+  margin: 24px;
+  max-width: calc(100% - 48px);
+  max-height: calc(100% - 48px);
+  box-sizing: border-box;
+}
+/* 内嵌浏览器要更宽：登录二维码得够大才扫得上 */
+.modal-container.clipin-anchor-bl.clipin-modal-wide > .modal {
+  width: min(880px, calc(100% - 48px));
+}
+
+/* flex 链打通：.modal 是 column flex，.modal-content 是它的子项。
+   flex 子项默认 min-height:auto（不会收缩到内容高度以下），
+   不显式写 min-height:0 的话，webview 的 min-height 会反过来把弹窗撑破 max-height，
+   按钮行又被顶出去了 —— 等于没改。 */
+.modal-container.clipin-anchor-bl > .modal > .modal-content {
   display: flex;
   flex-direction: column;
-  max-height: 82vh;        /* 弹窗整体限高，避免在某些分辨率下撑到屏幕外 */
-  box-sizing: border-box;  /* width 不被 padding 撑爆 */
-  padding: 0 4px;          /* 给按钮左右安全间距，别让它们贴到视口边 */
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* 登录 / 取数弹窗：尺寸交给外层 .modal 管，这里只负责内部排布 */
+.clipin-login-modal,
+.clipin-browser-modal {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  box-sizing: border-box;
 }
 
 /* h3 + tip 文字占顶部自然高度 */
@@ -38,7 +76,9 @@
   position: relative;
   overflow: hidden;
   width: 100%;
-  min-height: 360px;
+  /* 240 而不是更大：弹窗高度已被限制为「窗口高度 - 48px」，
+     这里再贪心就会把下面按钮行顶出可视区，等于白限高。 */
+  min-height: 240px;
   border: 1px solid var(--background-modifier-border);
   border-radius: 8px;
   background: var(--background-secondary);
@@ -131,9 +171,13 @@
   font-weight: 600;
 }
 
-/* 专辑/收藏夹选择弹窗 */
+/* 专辑/收藏夹选择弹窗。
+   高度不再写死 55vh —— vh 是视口单位，窗口没最大化时会把下面按钮顶出去。
+   改成 flex 子项自动吃掉弹窗剩余空间、超出内部滚动：
+   父级 .modal 已用 calc(100% - 48px) 限高，这里跟着收缩就不会溢出。 */
 .clipin-picker-list {
-  max-height: 55vh;
+  flex: 1 1 auto;
+  min-height: 120px;
   overflow-y: auto;
   border: 1px solid var(--background-modifier-border);
   border-radius: 8px;
