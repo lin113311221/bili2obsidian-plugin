@@ -769,8 +769,11 @@ var require_engine = __commonJS({
         return result;
       }
       log(`[engine] \u5DF2\u767B\u5F55\uFF1A${authResult.user || "(\u672A\u77E5\u7528\u6237)"}`);
+      const whitelist = Array.isArray(o.collections) ? o.collections.filter(Boolean) : [];
       let collections = [];
-      if (provider.capabilities && provider.capabilities.collections) {
+      const supportsCollections = !!(provider.capabilities && provider.capabilities.collections);
+      const needCollectionList = supportsCollections && (whitelist.length > 0 || provider.mode !== "webview");
+      if (needCollectionList) {
         progress({ phase: "collections", message: "\u6B63\u5728\u83B7\u53D6\u6536\u85CF\u5939\u5217\u8868\u2026" });
         try {
           collections = await provider.listCollections({ auth: o.auth, http, webviewHost: o.webviewHost });
@@ -779,11 +782,15 @@ var require_engine = __commonJS({
           collections = [];
         }
       }
-      const whitelist = Array.isArray(o.collections) ? o.collections.filter(Boolean) : [];
       if (whitelist.length) {
         const before = collections.length;
         collections = collections.filter((c) => whitelist.includes(String(c.id)) || whitelist.includes(String(c.title)));
         log(`[engine] \u6536\u85CF\u5939\u767D\u540D\u5355\uFF1A${before} \u2192 ${collections.length}`);
+        if (!collections.length) {
+          result.errors.push(`\u6307\u5B9A\u7684\u4E13\u8F91/\u6536\u85CF\u5939\uFF08${whitelist.join("\u3001")}\uFF09\u90FD\u6CA1\u6709\u5339\u914D\u5230\uFF0C\u672C\u6B21\u5DF2\u4E2D\u6B62\uFF0C\u672A\u5199\u5165\u4EFB\u4F55\u5185\u5BB9\u3002\u8BF7\u5728\u8BBE\u7F6E\u9875\u91CD\u65B0\u70B9\u300C\u9009\u62E9\u4E13\u8F91\u300D\u6838\u5BF9\u5217\u8868\uFF0C\u6216\u6E05\u7A7A\u8303\u56F4\u6539\u540C\u6B65\u5168\u90E8\u3002`);
+          result.failed = -1;
+          return result;
+        }
       }
       if (!collections.length) collections = [{ id: "", title: "\u5168\u90E8" }];
       for (let ci = 0; ci < collections.length; ci++) {
@@ -835,7 +842,7 @@ var require_engine = __commonJS({
               detail = Object.assign(detail, d || {});
               if (d && d.error) log(`[engine] \u8BE6\u60C5\u83B7\u53D6\u4E0D\u5B8C\u6574 ${item.sourceId}\uFF1A${d.error}`);
             }
-            if (detail.transcript) item.transcript = detail.transcript;
+            if (enrich.transcript && detail.transcript) item.transcript = detail.transcript;
             if (detail.content) item.content = detail.content;
             if (!item.transcript && enrich.transcript && enrich.asr && enrich.asr.apiKey && item.videoUrl) {
               try {
@@ -1234,9 +1241,14 @@ var require_xiaohongshu = __commonJS({
           // 2) 打开个人主页
           async navigate() {
             await webviewHost.goto(profileUrl, { waitUntil: "dom-ready", timeoutMs: 3e4 });
-            await webviewHost.clickByText({ selector: '.reds-tab, .feeds-tab, [class*="tab-item"]', text: "\u6536\u85CF" });
+            const favClicked = await webviewHost.clickByText({ selector: '.reds-tab, .feeds-tab, [class*="tab-item"]', text: "\u6536\u85CF" });
+            if (!favClicked) {
+              throw new Error("\u6CA1\u627E\u5230\u300C\u6536\u85CF\u300D\u6807\u7B7E\u2014\u2014\u53EF\u80FD\u767B\u5F55\u6001\u5DF2\u5931\u6548\u6216\u9875\u9762\u6539\u7248\u3002\u8BF7\u91CD\u65B0\u767B\u5F55\u540E\u91CD\u8BD5");
+            }
             if (albumTitle) {
               await webviewHost.sleep(2e3);
+              await webviewHost.clearCaptured();
+              await webviewHost.sleep(300);
               const clicked = await webviewHost.clickByText({
                 selector: '[class*="board"], [class*="album"], [class*="collect"] a, a, div',
                 text: albumTitle
@@ -1267,6 +1279,9 @@ var require_xiaohongshu = __commonJS({
             if (albumTitle) it.collection = albumTitle;
             items.push(it);
           }
+        }
+        if (!capturedBodies || capturedBodies.length === 0) {
+          throw new Error("\u6CA1\u6709\u62E6\u622A\u5230\u4EFB\u4F55\u6536\u85CF\u6570\u636E\u2014\u2014\u767B\u5F55\u6001\u53EF\u80FD\u5DF2\u5931\u6548\u3002\u8BF7\u91CD\u65B0\u767B\u5F55\u540E\u91CD\u8BD5");
         }
         log(`[xhs] \u62E6\u622A\u5230 ${capturedBodies.length} \u4E2A\u54CD\u5E94\uFF0C\u53BB\u91CD\u540E ${items.length} \u6761`);
         return items;
@@ -2869,8 +2884,10 @@ var LoginModal = class extends Modal {
         const all = await wc.session.cookies.get({ url: p.capabilities.loginUrl });
         value = (all || []).map((c) => `${c.name}=${c.value}`).join("; ");
         if (!value) throw new Error("\u672A\u8BFB\u5230 Cookie\uFF0C\u8BF7\u786E\u8BA4\u5DF2\u767B\u5F55");
-        const uid = (all || []).find((c) => /^(web_session|a1|userid|uid)$/i.test(c.name));
-        if (uid) userId = uid.value;
+        if (p.id === "xiaohongshu") {
+          const realUid = (all || []).find((c) => /^(userid|uid|user_id)$/i.test(c.name) && /^[a-f0-9]{16,32}$/i.test(c.value || ""));
+          if (realUid) userId = realUid.value;
+        }
       }
       const cfg = this.plugin.settings.platforms[p.id];
       if (p.id === "bilibili") cfg.auth.sessdata = value;
@@ -2883,6 +2900,9 @@ var LoginModal = class extends Modal {
             if (m) userId = m[1];
           } catch (_) {
           }
+          if (!userId) {
+            new Notice(`${p.name} \u5DF2\u4FDD\u5B58 Cookie\uFF0C\u4F46\u81EA\u52A8\u8BC6\u522B\u7528\u6237 ID \u5931\u8D25\u2014\u2014\u8BF7\u624B\u52A8\u5728\u8BBE\u7F6E\u9875\u586B userId`, 6e3);
+          }
           if (userId) cfg.auth.userId = userId;
         }
       }
@@ -2890,6 +2910,10 @@ var LoginModal = class extends Modal {
       await this.plugin.saveSettings();
       new Notice(`${p.name} \u767B\u5F55\u6001\u5DF2\u4FDD\u5B58`);
       this.close();
+      const cfgNow = this.plugin.settings.platforms[p.id];
+      if (p.capabilities && p.capabilities.collections && !(cfgNow.collections || []).length) {
+        setTimeout(() => this.plugin.promptChooseCollections(p.id), 500);
+      }
     } catch (e) {
       console.error("[clipin] \u63D0\u53D6\u767B\u5F55\u6001\u5931\u8D25", e);
       new Notice("\u63D0\u53D6\u5931\u8D25\uFF1A" + e.message);
@@ -2918,9 +2942,57 @@ var ClipinPlugin = class extends Plugin {
         callback: () => this.syncOne(id)
       });
     }
-    this.addSettingTab(new ClipinSettingTab(this.app, this));
+    this.settingTab = new ClipinSettingTab(this.app, this);
+    this.addSettingTab(this.settingTab);
     this.setupAutoSync();
     console.log("[clipin] \u5DF2\u52A0\u8F7D\uFF0C\u652F\u6301\u5E73\u53F0\uFF1A" + PLATFORM_ORDER.join(", "));
+  }
+  /**
+   * 登录成功后的专辑引导：读一次专辑列表 → 弹勾选窗。
+   * 用户不用再手动写专辑名，登录完直接点选。
+   * 设置页「选择专辑」按钮也走这里（统一入口）。
+   */
+  async promptChooseCollections(platformId) {
+    const p = core.getProvider(platformId);
+    const cfg = this.settings.platforms[platformId];
+    if (!p || !cfg) return;
+    if (!(p.capabilities && p.capabilities.collections)) return;
+    const sel = cfg.collections || [];
+    try {
+      let list = null;
+      if (p.mode === "webview") {
+        new Notice("\u6B63\u5728\u8BFB\u53D6\u4E13\u8F91\u5217\u8868\u2026\uFF08\u6D4F\u89C8\u5668\u7A97\u53E3\u81EA\u52A8\u6253\u5F00\uFF09", 4e3);
+        let modal = null;
+        const host = await this.openBrowser(p, cfg.auth && cfg.auth.cookie, {
+          autoStart: true,
+          title: `\u6B63\u5728\u8BFB\u53D6 ${p.name} \u4E13\u8F91\u5217\u8868`,
+          onOpened: (m) => {
+            modal = m;
+          }
+        });
+        if (!host) return;
+        try {
+          list = await p.listCollections({ auth: cfg.auth, http: this.http, webviewHost: host, logger: (m) => console.log("[clipin] " + m) });
+        } finally {
+          if (modal) modal.close();
+        }
+      } else {
+        list = await p.listCollections({ auth: cfg.auth, http: this.http });
+      }
+      if (!list || !list.length) {
+        new Notice("\u6CA1\u8BFB\u5230\u4E13\u8F91\u2014\u2014\u5C06\u4FDD\u6301\u300C\u540C\u6B65\u5168\u90E8\u6536\u85CF\u300D");
+        return;
+      }
+      new CollectionPickerModal(this.app, list, sel, async (chosen) => {
+        cfg.collections = chosen;
+        await this.saveSettings();
+        if (this.settingTab) this.settingTab.display();
+        new Notice(chosen.length ? `\u5DF2\u8BBE\u4E3A\u53EA\u540C\u6B65\uFF1A${chosen.join("\u3001")}` : "\u5DF2\u8BBE\u4E3A\u540C\u6B65\u5168\u90E8\u6536\u85CF");
+      }).open();
+    } catch (e) {
+      console.error("[clipin] \u8BFB\u53D6\u4E13\u8F91\u5931\u8D25", e);
+      new Notice("\u8BFB\u53D6\u4E13\u8F91\u5931\u8D25\uFF1A" + e.message);
+    }
   }
   /** 打开对话侧栏；已经开着就直接聚焦，不重复开 */
   async openChatView() {
@@ -3105,6 +3177,7 @@ var ClipinPlugin = class extends Plugin {
     return new Promise((resolve) => {
       const modal = new BrowserModal(this.app, provider, resolve, authCookie, opts);
       modal.open();
+      if (opts && typeof opts.onOpened === "function") opts.onOpened(modal);
     });
   }
   /** AI 接口探活 */
@@ -3602,36 +3675,12 @@ var ClipinSettingTab = class extends PluginSettingTab {
         }
         if (p.capabilities && p.capabilities.collections) {
           const sel = cfg.collections || [];
-          new Setting(containerEl).setName("\u3000\u540C\u6B65\u8303\u56F4").setDesc(sel.length ? "\u53EA\u540C\u6B65\uFF1A" + sel.join("\u3001") : "\u5168\u90E8\u6536\u85CF\uFF08\u70B9\u53F3\u8FB9\u6309\u94AE\u6311\u4E13\u8F91\uFF09").addButton((b) => b.setButtonText("\u9009\u62E9\u4E13\u8F91").onClick(async () => {
+          new Setting(containerEl).setName("\u3000\u540C\u6B65\u8303\u56F4").setDesc(sel.length ? "\u53EA\u540C\u6B65\uFF1A" + sel.join("\u3001") : "\u5168\u90E8\u6536\u85CF\uFF08\u70B9\u53F3\u8FB9\u6309\u94AE\u6311\u4E13\u8F91\uFF09").addButton((b) => b.setButtonText(sel.length ? "\u91CD\u65B0\u9009\u62E9" : "\u9009\u62E9\u4E13\u8F91").onClick(async () => {
             b.setButtonText("\u8BFB\u53D6\u4E2D\u2026").setDisabled(true);
             try {
-              let list;
-              if (p.mode === "webview") {
-                new Notice("\u6B63\u5728\u6253\u5F00\u5185\u5D4C\u6D4F\u89C8\u5668\u8BFB\u53D6\u4E13\u8F91\u5217\u8868\u2026", 4e3);
-                const host = await plugin.openBrowser(
-                  p,
-                  cfg.auth && cfg.auth.cookie,
-                  { autoStart: true, title: `\u6B63\u5728\u8BFB\u53D6 ${p.name} \u4E13\u8F91\u5217\u8868` }
-                );
-                if (!host) return;
-                list = await p.listCollections({ auth: cfg.auth, http: plugin.http, webviewHost: host, logger: (m) => console.log("[clipin] " + m) });
-                new Notice("\u4E13\u8F91\u8BFB\u5230\u4E86\uFF0C\u6D4F\u89C8\u5668\u7A97\u53E3\u53EF\u4EE5\u5173\u4E86", 4e3);
-              } else {
-                list = await p.listCollections({ auth: cfg.auth, http: plugin.http });
-              }
-              if (!list || !list.length) {
-                new Notice("\u6CA1\u8BFB\u5230\u4E13\u8F91\u2014\u2014\u5C06\u4FDD\u6301\u300C\u540C\u6B65\u5168\u90E8\u300D");
-                return;
-              }
-              new CollectionPickerModal(plugin.app, list, sel, async (chosen) => {
-                cfg.collections = chosen;
-                await plugin.saveSettings();
-                this.display();
-              }).open();
-            } catch (e) {
-              new Notice("\u8BFB\u53D6\u4E13\u8F91\u5931\u8D25\uFF1A" + e.message);
+              await plugin.promptChooseCollections(id);
             } finally {
-              b.setButtonText("\u9009\u62E9\u4E13\u8F91").setDisabled(false);
+              b.setButtonText((plugin.settings.platforms[id].collections || []).length ? "\u91CD\u65B0\u9009\u62E9" : "\u9009\u62E9\u4E13\u8F91").setDisabled(false);
             }
           }));
         }
