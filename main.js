@@ -2616,21 +2616,29 @@ var require_webview_host = __commonJS({
       let lastCount = 0;
       function waitDomReady(timeoutMs) {
         return new Promise((resolve, reject) => {
-          const t = setTimeout(() => reject(new Error("\u9875\u9762\u52A0\u8F7D\u8D85\u65F6")), timeoutMs || 45e3);
-          const handler = () => {
-            clearTimeout(t);
-            resolve();
+          let settled = false;
+          const done = () => {
+            if (!settled) {
+              settled = true;
+              cleanup();
+              resolve();
+            }
           };
-          if (webview.executeJavaScript) {
-            webview.executeJavaScript("document.readyState").then((rs) => {
-              if (rs === "complete" || rs === "interactive") {
-                clearTimeout(t);
-                resolve();
-              }
-            }).catch(() => {
-            });
-          }
-          webview.addEventListener("dom-ready", handler, { once: true });
+          const fail = () => {
+            if (!settled) {
+              settled = true;
+              cleanup();
+              reject(new Error("\u9875\u9762\u52A0\u8F7D\u8D85\u65F6"));
+            }
+          };
+          const cleanup = () => {
+            clearTimeout(t);
+            webview.removeEventListener("did-finish-load", done);
+            webview.removeEventListener("dom-ready", done);
+          };
+          const t = setTimeout(fail, (timeoutMs || 45e3) + 5e3);
+          webview.addEventListener("did-finish-load", done);
+          webview.addEventListener("dom-ready", done);
         });
       }
       async function inject(pattern) {
