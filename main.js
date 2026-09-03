@@ -46,6 +46,12 @@ var require_model = __commonJS({
     }
     function cleanText(s) {
       if (s == null) return "";
+      if (typeof s === "object") {
+        if (typeof s.name === "string") return cleanText(s.name);
+        if (typeof s.nickname === "string") return cleanText(s.nickname);
+        if (typeof s.nick_name === "string") return cleanText(s.nick_name);
+        return "";
+      }
       return String(s).replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u200b-\u200f\u2028\u2029]/g, "").trim();
     }
     function toISO(v) {
@@ -857,6 +863,7 @@ var require_engine = __commonJS({
               const d = await provider.fetchDetail({ auth: o.auth, http, item, webviewHost: o.webviewHost, onTokenRefresh: o.onTokenRefresh });
               detail = Object.assign(detail, d || {});
               if (d && d.error) log(`[engine] \u8BE6\u60C5\u83B7\u53D6\u4E0D\u5B8C\u6574 ${item.sourceId}\uFF1A${d.error}`);
+              else if (d && (d.videoUrl || d.content)) log(`[engine] \u8BE6\u60C5\u5DF2\u8865\u9F50 ${item.sourceId}`);
             }
             if (enrich.transcript && detail.transcript) item.transcript = detail.transcript;
             if (detail.content) item.content = detail.content;
@@ -1345,16 +1352,15 @@ var require_xiaohongshu = __commonJS({
         return albums.map((a) => ({ id: a.title, title: a.title, count: a.count || 0 }));
       },
       /**
-       * 详情补齐（pro 转写链路的关键一环，v0.5.28）。
+       * 详情补齐（v0.5.30 重写守卫）。
        *
-       * 为什么要这个：列表/专辑接口返回的笔记卡片**不带视频流地址**
-       * （pickVideoUrl 拿到空串），engine 的 ASR 闸门 `item.videoUrl` 过不去 →
-       * 视频笔记永远没有转写。视频流地址只存在于**详情页**的 feed 接口
-       * （/api/sns/web/v1/feed，HTML 页面同样不做签名校验，浏览器自己带签名）。
+       * v0.5.28 的教训：守卫用 item.raw.video 判断"是不是视频笔记"——但专辑/列表
+       * 接口的卡片**只有 type:"video" 标记，video 对象（含视频流地址）只在详情页
+       * 的 feed 接口里**。守卫恒 false → 34 条全部静默 return → 0 转写 0 总结，
+       * 且日志一行没有（真机 2026-09-04 02:00 同步 2 秒跑完 34 条的现场）。
        *
-       * 做法：webview 导航到笔记详情页（item.url 已带 xsec_token），拦截 feed 响应，
-       * 从 noteCard 里取完整 desc + 视频流。只对视频笔记做（图文列表数据已足够），
-       * 每个视频一次页面导航，成本可控。
+       * v0.5.30 守卫：type === 'video'（卡片必带）或缺正文（图文的 desc 也在详情页）。
+       * 即：视频笔记补视频流+正文，图文笔记补正文——两类都值得去一趟详情页。
        *
        * @returns {Promise<{content?, videoUrl?, media?, error?}>}
        */
@@ -1362,14 +1368,18 @@ var require_xiaohongshu = __commonJS({
         const log = logger || (() => {
         });
         if (!webviewHost) return {};
-        if (!item || !item.raw || !item.raw.video) return {};
+        const raw = item.raw || {};
+        const isVideo = raw.type === "video" || raw.video && Object.keys(raw.video).length > 0;
+        const needBody = !item.content || !String(item.content).trim();
+        if (!isVideo && !needBody) return {};
+        log(`[xhs] \u8BE6\u60C5\u8865\u9F50 ${item.id}${isVideo ? "\uFF08\u89C6\u9891\uFF09" : "\uFF08\u8865\u6B63\u6587\uFF09"}`);
         const bodies = await webviewHost.captureResponses({
           urlPattern: "/api/sns/web/v1/feed",
           async navigate() {
             await webviewHost.goto(item.url, { waitUntil: "dom-ready", timeoutMs: 3e4 });
           },
           async drive() {
-            await webviewHost.sleep(2600);
+            await webviewHost.sleep(2800);
           }
         });
         for (const body of bodies || []) {
@@ -1377,15 +1387,17 @@ var require_xiaohongshu = __commonJS({
           for (const it of items) {
             const n = it && it.noteCard;
             if (!n) continue;
-            if ((n.note_id || item.id) !== item.id) continue;
-            const videoUrl = pickVideoUrl(n);
-            log(`[xhs] \u8BE6\u60C5\u8865\u9F50 ${item.id}\uFF1Adesc=${(n.desc || "").length}\u5B57 videoUrl=${videoUrl ? "\u6709" : "\u65E0"}`);
-            const out = { content: n.desc || item.content, videoUrl, media: pickImages(n) };
-            if (!videoUrl) out.error = "\u8BE6\u60C5\u63A5\u53E3\u6CA1\u7ED9\u89C6\u9891\u6D41\u5730\u5740";
+            if ((n.noteId || n.note_id || item.id) !== item.id) continue;
+            const videoUrl = isVideo ? pickVideoUrl(n) : "";
+            log(`[xhs] \u8BE6\u60C5\u547D\u4E2D ${item.id}\uFF1Adesc=${(n.desc || "").length}\u5B57 videoUrl=${videoUrl ? "\u6709" : isVideo ? "\u65E0" : "\u2014"}`);
+            const out = { content: n.desc || item.content, media: pickImages(n) };
+            if (videoUrl) out.videoUrl = videoUrl;
+            if (isVideo && !videoUrl) out.error = "\u8BE6\u60C5\u63A5\u53E3\u6CA1\u7ED9\u89C6\u9891\u6D41\u5730\u5740";
             return out;
           }
         }
-        return { error: "\u8BE6\u60C5\u9875\u6CA1\u62E6\u5230 feed \u54CD\u5E94\uFF08\u9875\u9762\u6CA1\u52A0\u8F7D\u5B8C\u6216\u6539\u7248\uFF09" };
+        log(`[xhs] \u8BE6\u60C5\u672A\u547D\u4E2D ${item.id}\uFF08\u62E6\u5230 ${bodies ? bodies.length : 0} \u4E2A\u54CD\u5E94\uFF09`);
+        return { error: "\u8BE6\u60C5\u9875\u6CA1\u62E6\u5230\u5F53\u524D\u7B14\u8BB0\u7684 feed \u54CD\u5E94" };
       },
       /** 校验登录：webview 模式下以页面能否拿到用户信息为准 */
       async validate({ auth, http, webviewHost }) {
@@ -1594,6 +1606,8 @@ var require_xiaohongshu = __commonJS({
       const nid = n.note_id || n.id || "";
       const title = n.display_title || n.title || n.desc || "";
       const user = n.user || {};
+      const nick = user.nickname || user.nick_name || (typeof user.name === "string" ? user.name : "") || "";
+      const uid = user.user_id || user.userId || "";
       const images = pickImages(n);
       return makeItem({
         id: nid,
@@ -1601,8 +1615,8 @@ var require_xiaohongshu = __commonJS({
         title: title || "\uFF08\u65E0\u6807\u9898\u7B14\u8BB0\uFF09",
         url: `https://www.xiaohongshu.com/explore/${nid}${n.xsec_token ? "?xsec_token=" + n.xsec_token : ""}`,
         author: {
-          name: user.nickname || "",
-          url: user.user_id ? `https://www.xiaohongshu.com/user/profile/${user.user_id}` : ""
+          name: nick,
+          url: uid ? `https://www.xiaohongshu.com/user/profile/${uid}` : ""
         },
         summary: n.desc || "",
         cover: pickCover(n),
