@@ -758,6 +758,7 @@ var require_engine = __commonJS({
       const quota = o.quota || { max: 0, used: 0, isPro: false };
       const enrich = o.enrich || {};
       const limit = Number(o.limit) || 0;
+      const updateExisting = !!o.updateExisting;
       const result = { created: 0, skipped: 0, failed: 0, quotaHit: false, errors: [], aborted: false };
       if (!provider) throw new Error("\u7F3A\u5C11 provider");
       if (!target) throw new Error("\u7F3A\u5C11 target");
@@ -846,7 +847,8 @@ var require_engine = __commonJS({
             return result;
           }
           try {
-            if (target.exists && await target.exists(item)) {
+            const existed = target.exists ? await target.exists(item) : false;
+            if (existed && !updateExisting) {
               result.skipped++;
               continue;
             }
@@ -905,13 +907,19 @@ var require_engine = __commonJS({
             });
             await target.write(item, md, {
               fileName: buildFileName(item),
-              dirPath: buildDirPath(item, o.renderOpts && o.renderOpts.rootPath || "savault", o.renderOpts && o.renderOpts.dirTemplate)
+              dirPath: buildDirPath(item, o.renderOpts && o.renderOpts.rootPath || "savault", o.renderOpts && o.renderOpts.dirTemplate),
+              // 重新同步：标题改过时按 sourceId 找回原文件覆写（不另存副本）
+              existingPath: existed && target.findExistingPath ? await target.findExistingPath(item) : null
             });
-            result.created++;
-            if (remaining !== Infinity) remaining--;
+            if (existed) {
+              result.updated = (result.updated || 0) + 1;
+            } else {
+              result.created++;
+              if (remaining !== Infinity) remaining--;
+            }
             progress({
               phase: "write",
-              message: `\u5DF2\u540C\u6B65 ${result.created} \u6761\uFF1A${item.title.slice(0, 28)}`,
+              message: existed ? `\u5DF2\u66F4\u65B0 ${result.updated} \u6761` : `\u5DF2\u540C\u6B65 ${result.created} \u6761\uFF1A${item.title.slice(0, 28)}`,
               current: result.created
             });
           } catch (e) {
@@ -1973,11 +1981,26 @@ var require_obsidian = __commonJS({
           }
           return false;
         },
+        /**
+         * v0.5.29 重新同步：按 sourceId 找已有文件路径（标题改过也能覆写对文件，
+         * 而不是按新文件名另存一份副本）。engine 在 updateExisting 模式下调它。
+         */
+        async findExistingPath(item) {
+          if (!item || !item.sourceId) return null;
+          const files = vault.getMarkdownFiles ? vault.getMarkdownFiles() : [];
+          for (const f of files) {
+            const cache = vault.metadataCache && vault.metadataCache.getFileCache(f);
+            const fm = cache && cache.frontmatter;
+            if (fm && (fm.source_id === item.sourceId || fm.sourceId === item.sourceId)) return f.path;
+          }
+          return null;
+        },
         async write(item, markdown, meta) {
           const m = meta || {};
           const dirPath = m.dirPath || "Clipin";
           await ensureFolder(dirPath);
-          const filePath = toPath(`${dirPath}/${m.fileName || item.id + ".md"}`);
+          const prevPath = m.existingPath || (this && this.findExistingPath ? await this.findExistingPath(item) : null);
+          const filePath = prevPath || toPath(`${dirPath}/${m.fileName || item.id + ".md"}`);
           const existing = vault.getAbstractFileByPath(filePath);
           if (existing) {
             if (vault.modify) await vault.modify(existing, markdown);
@@ -5643,10 +5666,10 @@ var ClipinPlugin = class extends Plugin {
       logger: (m) => this._log("http", m)
     });
     this._trimLogFile();
-    this.addRibbonIcon("scissors", "\u77E5\u8BC6\u6865\u6881\uFF1A\u7ACB\u5373\u540C\u6B65\u6536\u85CF", () => this.syncAll());
+    this.addRibbonIcon("scissors", "\u77E5\u8BC6\u6865\u6881\uFF1A\u7ACB\u5373\u540C\u6B65\u6536\u85CF", () => this.syncAll({ askMode: true }));
     this.registerView(CHAT_VIEW_TYPE, (leaf) => new ChatView(leaf, this));
     this.addRibbonIcon("message-circle", "\u77E5\u8BC6\u6865\u6881\uFF1A\u95EE\u6536\u85CF\uFF08AI \u5BF9\u8BDD\uFF09", () => this.openChatView());
-    this.addCommand({ id: "clipin-sync", name: "\u540C\u6B65\u6536\u85CF", callback: () => this.syncAll() });
+    this.addCommand({ id: "clipin-sync", name: "\u540C\u6B65\u6536\u85CF", callback: () => this.syncAll({ askMode: true }) });
     this.addCommand({ id: "clipin-chat", name: "\u95EE\u6536\u85CF\uFF08AI \u5BF9\u8BDD\uFF09", callback: () => this.openChatView() });
     for (const id of PLATFORM_ORDER) {
       const p = core.getProvider(id);
@@ -5654,7 +5677,12 @@ var ClipinPlugin = class extends Plugin {
       this.addCommand({
         id: `clipin-sync-${id}`,
         name: `\u540C\u6B65 ${p.name}`,
-        callback: () => this.syncOne(id)
+        callback: () => this.syncOne(id, { askMode: true })
+      });
+      this.addCommand({
+        id: `clipin-resync-${id}`,
+        name: `\u91CD\u65B0\u540C\u6B65 ${p.name}\uFF08\u66F4\u65B0\u5DF2\u6709\u7B14\u8BB0\uFF09`,
+        callback: () => this.syncOne(id, { mode: "update" })
       });
     }
     this.settingTab = new ClipinSettingTab(this.app, this);
@@ -6117,7 +6145,49 @@ var ClipinPlugin = class extends Plugin {
     }
   }
   /** 同步单个平台 */
-  async syncOne(platformId) {
+  /**
+   * 同步模式选择器（v0.5.29）。
+   * 默认「仅新增」对用户零打扰；但 v0.5.28 修好转写链路后，旧笔记需要能补
+   * 转写/总结——所以 ribbon / 命令面板的默认入口弹这个快速选择（三秒可选中），
+   * 自动同步跳过（用无打扰的「仅新增」）。
+   * @param {string} reason 显示在提示里（比如「补转写/总结」），可空
+   * @returns {Promise<'new'|'update'|null>} null=用户取消
+   */
+  _chooseSyncMode(reason) {
+    return new Promise((resolve) => {
+      const { SuggestModal } = require("obsidian");
+      const hint = reason ? `\uFF08${reason}\uFF09` : "";
+      const opts = [
+        { id: "new", text: "\u4EC5\u540C\u6B65\u65B0\u589E\u6536\u85CF", desc: "\u5DF2\u5B58\u5728\u7684\u7B14\u8BB0\u8DF3\u8FC7\uFF08\u9ED8\u8BA4\uFF0C\u6700\u5FEB\uFF09" },
+        { id: "update", text: "\u91CD\u65B0\u540C\u6B65\uFF08\u66F4\u65B0\u5DF2\u6709\u7B14\u8BB0\uFF09", desc: `\u91CD\u65B0\u62C9\u53D6\u5E76\u8986\u5199\uFF1A\u8865\u8F6C\u5199 / \u8865\u603B\u7ED3${hint}` }
+      ];
+      class ModeModal extends SuggestModal {
+        getSuggestions() {
+          return opts;
+        }
+        renderSuggestion(o, el) {
+          el.createEl("div", { text: o.text });
+          el.createEl("div", { text: o.desc, cls: "clipin-mode-desc" });
+        }
+        onChooseSuggestion(o) {
+          resolve(o.id);
+        }
+        onClose() {
+          if (!this.chosen) resolve(null);
+        }
+      }
+      const m = new ModeModal(this.app);
+      m.chosen = false;
+      const orig = m.onChooseSuggestion.bind(m);
+      m.onChooseSuggestion = (o) => {
+        m.chosen = true;
+        orig(o);
+      };
+      m.open();
+    });
+  }
+  async syncOne(platformId, opts) {
+    const o = opts || {};
     const p = core.getProvider(platformId);
     if (!p) {
       new Notice("\u672A\u77E5\u5E73\u53F0");
@@ -6137,6 +6207,15 @@ var ClipinPlugin = class extends Plugin {
     try {
       new Notice(`\u5F00\u59CB\u540C\u6B65 ${p.name}\u2026\uFF08\u5982\u5F39\u51FA\u6D4F\u89C8\u5668\u7A97\u53E3\uFF0C\u767B\u5F55\u540E\u70B9\u300C\u5F00\u59CB\u8BFB\u53D6\u300D\uFF09`);
       const isPro = !!this.settings.licenseValid;
+      let mode = o.mode;
+      if (!mode && o.askMode) {
+        mode = await this._chooseSyncMode("\u7ED9\u5DF2\u6709\u7B14\u8BB0\u8865\u8F6C\u5199 / \u603B\u7ED3");
+        if (!mode) {
+          new Notice("\u5DF2\u53D6\u6D88");
+          return;
+        }
+      }
+      const updateExisting = mode === "update";
       const needHost = platformId === "xiaohongshu" || platformId === "twitter";
       if (needHost && p.capabilities && p.capabilities.collections && !(cfg.collections || []).length && !cfg.collectionsConfirmed) {
         new Notice("\u7B2C\u4E00\u6B21\u540C\u6B65\u524D\uFF0C\u5148\u9009\u62E9\u8981\u540C\u6B65\u54EA\u4E9B\u4E13\u8F91", 4e3);
@@ -6157,6 +6236,9 @@ var ClipinPlugin = class extends Plugin {
         http: this.http,
         auth: cfg.auth,
         collections: cfg.collections || [],
+        // v0.5.29：重新同步 = 已存在的笔记也拉最新数据覆写（补转写/总结），
+        // 而不是跳过。覆写以 sourceId 命中同名文件，不产生副本。
+        updateExisting,
         quota: { max: FREE_QUOTA, used: this.settings.syncedCount || 0, isPro },
         enrich: {
           transcript: isPro && this.settings.fetchTranscript,
@@ -6201,13 +6283,22 @@ var ClipinPlugin = class extends Plugin {
     }
   }
   /** 同步所有已启用的平台 */
-  async syncAll() {
+  async syncAll(opts) {
+    const o = opts || {};
     const ids = PLATFORM_ORDER.filter((id) => this.settings.platforms[id] && this.settings.platforms[id].enabled);
     if (!ids.length) {
       new Notice("\u8BF7\u5148\u5728\u8BBE\u7F6E\u91CC\u542F\u7528\u81F3\u5C11\u4E00\u4E2A\u5E73\u53F0");
       return;
     }
-    for (const id of ids) await this.syncOne(id);
+    let mode;
+    if (o.askMode) {
+      mode = await this._chooseSyncMode("\u7ED9\u5DF2\u6709\u7B14\u8BB0\u8865\u8F6C\u5199 / \u603B\u7ED3");
+      if (!mode) {
+        new Notice("\u5DF2\u53D6\u6D88");
+        return;
+      }
+    }
+    for (const id of ids) await this.syncOne(id, { mode });
     this.invalidateChatIndex();
   }
   /**
