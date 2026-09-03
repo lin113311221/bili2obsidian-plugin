@@ -1210,7 +1210,11 @@ var require_xiaohongshu = __commonJS({
         transcript: true,
         // 视频笔记口播走 dashscope ASR（engine 富化阶段，见 core/transcript.js）
         media: true,
-        loginUrl: WEB
+        loginUrl: WEB,
+        // 轻量登录页（v0.5.15）：explore 是满屏视频的瀑布流，正是拖垮内嵌浏览器的元凶。
+        // 登录只需要拿到 cookie，用这个纯登录页可以完全避开视频流；配合自动检测，
+        // 页面还没来得及跳转回 explore 就已经提取完并关窗了。
+        liteLoginUrl: WEB + "/login"
       },
       /**
        * 列收藏专辑（webview 模式）。
@@ -2818,6 +2822,8 @@ var DEFAULT_SETTINGS = {
   licenseKey: "",
   licenseValid: false,
   syncedCount: 0,
+  // 内嵌浏览器兼容档位（v0.5.15）：崩溃一次自动降一档，见 WEBVIEW_PROFILES
+  webviewProfile: 3,
   platforms: {
     bilibili: { enabled: true, auth: { sessdata: "" }, collections: [], userLabel: "" },
     xiaohongshu: { enabled: false, auth: { cookie: "", userId: "" }, collections: [], userLabel: "" },
@@ -2881,6 +2887,18 @@ var WEBVIEW_PRELOAD = [
   "  } catch (_) {}",
   "})();"
 ].join("\n");
+var WEBVIEW_PROFILES = [
+  { name: "L0-\u5B8C\u6574", ua: true, preload: true, webprefs: true, allowpopups: true, liteUrl: false },
+  { name: "L1-\u65E0\u6269\u5C55\u9879", ua: true, preload: true, webprefs: false, allowpopups: false, liteUrl: false },
+  { name: "L2-\u65E0preload", ua: true, preload: false, webprefs: false, allowpopups: false, liteUrl: true },
+  { name: "L3-\u7ADE\u54C1\u5BF9\u9F50", ua: true, preload: true, webprefs: false, allowpopups: false, liteUrl: true },
+  { name: "L4-\u88F8\u5954", ua: false, preload: false, webprefs: false, allowpopups: false, liteUrl: true }
+];
+var DEFAULT_WEBVIEW_PROFILE = 3;
+function webviewProfile(level) {
+  const i = Math.max(0, Math.min(Number(level) || 0, WEBVIEW_PROFILES.length - 1));
+  return WEBVIEW_PROFILES[i];
+}
 function ensureWebviewPreload() {
   try {
     const fs = require("fs");
@@ -2893,14 +2911,17 @@ function ensureWebviewPreload() {
     return null;
   }
 }
-function makeWebviewEl(contentEl, partitionId, src, cls) {
+function makeWebviewEl(contentEl, partitionId, src, cls, opts) {
+  const o = opts || webviewProfile(DEFAULT_WEBVIEW_PROFILE);
   const wv = document.createElement("webview");
   wv.setAttribute("partition", partitionId);
-  wv.setAttribute("allowpopups", "");
-  wv.setAttribute("useragent", MAC_UA);
-  const preloadUrl = ensureWebviewPreload();
-  if (preloadUrl) wv.setAttribute("preload", preloadUrl);
-  wv.setAttribute("webpreferences", "autoplayPolicy=document-user-activation-required");
+  if (o.ua) wv.setAttribute("useragent", MAC_UA);
+  if (o.preload) {
+    const preloadUrl = ensureWebviewPreload();
+    if (preloadUrl) wv.setAttribute("preload", preloadUrl);
+  }
+  if (o.allowpopups) wv.setAttribute("allowpopups", "");
+  if (o.webprefs) wv.setAttribute("webpreferences", "autoplayPolicy=document-user-activation-required");
   if (cls) wv.setAttribute("class", cls);
   wv.setAttribute("src", src || "about:blank");
   contentEl.appendChild(wv);
@@ -2978,14 +2999,20 @@ var LoginModal = class extends Modal {
     contentEl.addClass("clipin-login-modal");
     contentEl.createEl("h3", { text: `\u767B\u5F55 ${p.name}` });
     contentEl.createEl("p", {
-      text: "\u5728\u4E0B\u65B9\u7A97\u53E3\u4E2D\u767B\u5F55\u540E\uFF0C\u70B9\u51FB\u300C\u63D0\u53D6\u767B\u5F55\u6001\u300D\u3002",
+      text: "\u5728\u4E0B\u65B9\u7A97\u53E3\u767B\u5F55\uFF0C\u6210\u529F\u540E\u4F1A\u81EA\u52A8\u63D0\u53D6\u5E76\u5173\u95ED\u3002",
       cls: "clipin-tip"
     });
-    this.plugin._log("info", `[login] \u6253\u5F00\u767B\u5F55\u7A97\u53E3\uFF1A${p.name} partition=persist:clipin-${p.id} ua=mac preload=${ensureWebviewPreload() ? "yes" : "no"}`);
-    this.webview = makeWebviewEl(contentEl, `persist:clipin-${p.id}`, p.capabilities.loginUrl || "about:blank", "clipin-webview");
+    const prof = webviewProfile(this.plugin.settings.webviewProfile);
+    const url = prof.liteUrl && p.capabilities.liteLoginUrl || p.capabilities.loginUrl || "about:blank";
+    this.plugin._log("info", `[login] \u6253\u5F00\u767B\u5F55\u7A97\u53E3\uFF1A${p.name} partition=persist:clipin-${p.id} \u6863\u4F4D=${prof.name} url=${url} preload=${prof.preload && ensureWebviewPreload() ? "yes" : "no"}`);
+    this.webview = makeWebviewEl(contentEl, `persist:clipin-${p.id}`, url, "clipin-webview", prof);
     attachWebviewGuards(this.webview, this.plugin, "login");
+    contentEl.createEl("p", {
+      text: "\u767B\u5F55\u6210\u529F\u540E\u4F1A\u81EA\u52A8\u63D0\u53D6\u5E76\u5173\u95ED\u672C\u7A97\u53E3\uFF0C\u4F60\u4E0D\u7528\u70B9\u4EFB\u4F55\u6309\u94AE\u3002",
+      cls: "clipin-tip"
+    });
     const row = contentEl.createDiv({ cls: "clipin-btn-row" });
-    const btn = row.createEl("button", { text: "\u63D0\u53D6\u767B\u5F55\u6001" });
+    const btn = row.createEl("button", { text: "\u63D0\u53D6\u767B\u5F55\u6001\uFF08\u81EA\u52A8\uFF0C\u53EF\u624B\u52A8\u70B9\uFF09" });
     btn.addClass("mod-cta");
     btn.onclick = async () => {
       btn.setAttr("disabled", "true");
@@ -2994,11 +3021,40 @@ var LoginModal = class extends Modal {
         await this.extract();
       } finally {
         btn.removeAttribute("disabled");
-        btn.setText("\u63D0\u53D6\u767B\u5F55\u6001");
+        btn.setText("\u63D0\u53D6\u767B\u5F55\u6001\uFF08\u81EA\u52A8\uFF0C\u53EF\u624B\u52A8\u70B9\uFF09");
       }
     };
     const close = row.createEl("button", { text: "\u5173\u95ED" });
     close.onclick = () => this.close();
+    this.startAutoDetect();
+  }
+  /**
+   * 自动检测登录成功（v0.5.15）：每 2 秒看一次登录态 cookie 是否出现，
+   * 一旦出现立刻提取并关窗。这样页面还没跳转回 explore（视频瀑布流）就已经
+   * 收工，全程不加载重页面 —— 从源头避开崩溃，用户也不需要碰 F12。
+   */
+  startAutoDetect() {
+    const p = this.provider;
+    const need = p.id === "bilibili" ? "SESSDATA" : p.id === "xiaohongshu" ? "web_session" : null;
+    if (!need) return;
+    this._detectTimer = setInterval(async () => {
+      if (this._busy || this._done) return;
+      try {
+        if (!webviewCanAccessWebContents(this.webview)) return;
+        const wc = this.webview.getWebContents();
+        if (!wc) return;
+        const url = p.id === "bilibili" ? "https://www.bilibili.com" : "https://www.xiaohongshu.com";
+        const all = await wc.session.cookies.get({ url });
+        if (!(all || []).some((c) => c.name === need && c.value)) return;
+        this.plugin._log("info", `[login] \u68C0\u6D4B\u5230 ${need}\uFF0C\u81EA\u52A8\u63D0\u53D6\u767B\u5F55\u6001`);
+        clearInterval(this._detectTimer);
+        this._done = true;
+        this._busy = true;
+        await this.extract();
+        this.close();
+      } catch (_) {
+      }
+    }, 2e3);
   }
   async extract() {
     const p = this.provider;
@@ -3056,15 +3112,20 @@ var LoginModal = class extends Modal {
     }
   }
   onClose() {
+    if (this._detectTimer) {
+      clearInterval(this._detectTimer);
+      this._detectTimer = null;
+    }
     this.plugin._log("info", "[login] \u767B\u5F55\u7A97\u53E3\u5DF2\u5173\u95ED");
     this.contentEl.empty();
   }
 };
 var ClipinPlugin = class extends Plugin {
   async onload() {
-    this._recoverCrashedPartitions();
+    this._crashedLastRun = this._recoverCrashedPartitions();
     await this.migrateLegacySettings();
     await this.loadSettings();
+    this._applyCrashFallback();
     this.http = core.createHttp({
       request: makeRequest(),
       // 限速（2026-09-03 用户要求，防风控）：
@@ -3143,10 +3204,26 @@ var ClipinPlugin = class extends Plugin {
         if (lastWebviewIdx < 0 && WEBVIEW_RE.test(lines[i])) lastWebviewIdx = i;
         if (lastUnloadIdx >= 0 && lastWebviewIdx >= 0) break;
       }
-      if (lastWebviewIdx < 0 || lastWebviewIdx < lastUnloadIdx) return;
+      if (lastWebviewIdx < 0 || lastWebviewIdx < lastUnloadIdx) return null;
       this._quarantinePartitions("\u68C0\u6D4B\u5230\u4E0A\u6B21\u5728\u5185\u5D4C\u6D4F\u89C8\u5668\u4F7F\u7528\u4E2D\u5F02\u5E38\u9000\u51FA");
+      return true;
     } catch (_) {
+      return null;
     }
+  }
+  /**
+   * 崩溃自动降档（v0.5.15）：上次确实崩在内嵌浏览器上，就把兼容档位降一级。
+   * 这样用户不用手动试——每崩一次，下次启动自动换成更保守的配置，
+   * 最多几轮就会落到「不崩」的组合，日志里会写明当前档位。
+   */
+  _applyCrashFallback() {
+    if (!this._crashedLastRun) return;
+    const cur = Number(this.settings.webviewProfile);
+    const next = Math.min((Number.isFinite(cur) ? cur : DEFAULT_WEBVIEW_PROFILE) + 1, WEBVIEW_PROFILES.length - 1);
+    if (next === cur) return;
+    this.settings.webviewProfile = next;
+    this.saveSettings();
+    this._log("warn", `\u4E0A\u6B21\u5D29\u6E83\uFF0C\u5185\u5D4C\u6D4F\u89C8\u5668\u517C\u5BB9\u6863\u4F4D\u81EA\u52A8\u964D\u7EA7\uFF1A${webviewProfile(cur).name} \u2192 ${webviewProfile(next).name}`);
   }
   /** 把 persist:clipin-* 分区改名隔离（不删，留底可查）。供自愈与设置页手动重置共用。 */
   _quarantinePartitions(reason) {
@@ -3727,8 +3804,9 @@ var BrowserModal = class extends Modal {
       text: this.opts.title ? "" : hasCookie ? "\u68C0\u6D4B\u5230\u8BBE\u7F6E\u91CC\u7684\u767B\u5F55\u4FE1\u606F\uFF0C\u4F1A\u81EA\u52A8\u5C1D\u8BD5\u514D\u767B\u5F55\u3002\u82E5\u7A97\u53E3\u4ECD\u662F\u767B\u5F55\u9875\uFF0C\u8BF7\u5728\u6B64\u767B\u5F55\u4E00\u6B21\uFF08\u53EA\u9700\u8FD9\u4E00\u6B21\uFF0C\u4E4B\u540E\u81EA\u52A8\u4FDD\u6301\uFF09\u3002\u786E\u8BA4\u767B\u5F55\u540E\u70B9\u300C\u5F00\u59CB\u8BFB\u53D6\u300D\u3002" : "\u6B64\u7A97\u53E3\u5C31\u662F\u6D4F\u89C8\u5668\uFF1A\u767B\u5F55\u4E00\u6B21\u540E\u70B9\u300C\u5F00\u59CB\u8BFB\u53D6\u300D\uFF1B\u767B\u5F55\u6001\u4F1A\u81EA\u52A8\u4FDD\u5B58\uFF0C\u4EE5\u540E\u4E0D\u7528\u518D\u767B\u3002",
       cls: "clipin-tip"
     });
-    this.plugin._log("info", `[browser] \u6253\u5F00\u8BFB\u53D6\u7A97\u53E3\uFF1A${p.name} partition=persist:clipin-${p.id} hasCookie=${hasCookie}`);
-    this.webview = makeWebviewEl(contentEl, `persist:clipin-${p.id}`, p.capabilities && p.capabilities.loginUrl || "about:blank", "clipin-webview");
+    const _prof = webviewProfile(this.plugin.settings.webviewProfile);
+    this.plugin._log("info", `[browser] \u6253\u5F00\u8BFB\u53D6\u7A97\u53E3\uFF1A${p.name} partition=persist:clipin-${p.id} \u6863\u4F4D=${_prof.name} hasCookie=${hasCookie}`);
+    this.webview = makeWebviewEl(contentEl, `persist:clipin-${p.id}`, p.capabilities && p.capabilities.loginUrl || "about:blank", "clipin-webview", _prof);
     attachWebviewGuards(this.webview, this.plugin, "browser");
     this.webview.addEventListener("dom-ready", async () => {
       if (this.cookiesInjected) return;
@@ -4066,6 +4144,17 @@ var ClipinSettingTab = class extends PluginSettingTab {
       await plugin.saveSettings();
     }));
     containerEl.createEl("h2", { text: "\u6545\u969C\u6392\u67E5" });
+    new Setting(containerEl).setName("\u5185\u5D4C\u6D4F\u89C8\u5668\u517C\u5BB9\u6863\u4F4D").setDesc("\u6253\u5F00\u767B\u5F55/\u540C\u6B65\u7A97\u53E3\u5C31\u95EA\u9000\u65F6\uFF0C\u5207\u6362\u66F4\u4FDD\u5B88\u7684\u5185\u5D4C\u6D4F\u89C8\u5668\u914D\u7F6E\u3002\u6BCF\u5D29\u4E00\u6B21\u4F1A\u81EA\u52A8\u964D\u4E00\u6863\uFF0C\u8FD9\u91CC\u4E5F\u80FD\u624B\u52A8\u9009\uFF08\u6539\u5B8C\u91CD\u5F00\u7A97\u53E3\u751F\u6548\uFF09").addDropdown((d) => {
+      for (let i = 0; i < WEBVIEW_PROFILES.length; i++) {
+        d.addOption(String(i), `${WEBVIEW_PROFILES[i].name}${i === DEFAULT_WEBVIEW_PROFILE ? "\uFF08\u9ED8\u8BA4\uFF09" : ""}`);
+      }
+      d.setValue(String(plugin.settings.webviewProfile));
+      d.onChange(async (v) => {
+        plugin.settings.webviewProfile = parseInt(v, 10);
+        await plugin.saveSettings();
+        new Notice(`\u5DF2\u5207\u6362\u5230 ${webviewProfile(plugin.settings.webviewProfile).name}`);
+      });
+    });
     new Setting(containerEl).setName("\u91CD\u7F6E\u5185\u5D4C\u6D4F\u89C8\u5668\u6570\u636E").setDesc("\u70B9\u300C\u767B\u5F55\u300D/\u5F00\u540C\u6B65\u7A97\u53E3\u5C31\u95EA\u9000\u65F6\u7528\uFF1A\u6E05\u6389\u5185\u5D4C\u6D4F\u89C8\u5668\u7684\u7F13\u5B58\u4E0E\u767B\u5F55\u6001\uFF08\u65E7\u6570\u636E\u6539\u540D\u7559\u5E95\u4E0D\u5220\u9664\uFF09\uFF0C\u7136\u540E\u4ECE\u5E72\u51C0\u72B6\u6001\u91CD\u5EFA\u3002\u9700\u5148\u5173\u95ED\u6240\u6709\u540C\u6B65/\u767B\u5F55\u7A97\u53E3").addButton((b) => b.setButtonText("\u7ACB\u5373\u91CD\u7F6E").setWarning().onClick(() => {
       const moved = plugin._quarantinePartitions("\u624B\u52A8\u91CD\u7F6E");
       new Notice(moved.length ? `\u5DF2\u91CD\u7F6E\uFF08${moved.join(", ")}\uFF09\u3002\u4E0B\u6B21\u6253\u5F00\u767B\u5F55/\u540C\u6B65\u7A97\u53E3\u5C06\u4ECE\u5E72\u51C0\u72B6\u6001\u5F00\u59CB\uFF0C\u9700\u91CD\u65B0\u767B\u5F55\u4E00\u6B21` : "\u6CA1\u6709\u53EF\u91CD\u7F6E\u7684\u6D4F\u89C8\u5668\u6570\u636E\uFF08\u6216\u6587\u4EF6\u6B63\u88AB\u5360\u7528\u2014\u2014\u8BF7\u5148\u5173\u95ED\u6240\u6709\u767B\u5F55/\u540C\u6B65\u7A97\u53E3\u518D\u8BD5\uFF09");
