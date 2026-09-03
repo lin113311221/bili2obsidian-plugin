@@ -40,6 +40,7 @@ var require_model = __commonJS({
         content: String(p.content || "").trim(),
         transcript: String(p.transcript || "").trim(),
         media: Array.isArray(p.media) ? p.media.filter(Boolean) : [],
+        videoUrl: String(p.videoUrl || "").trim(),
         raw: p.raw || {}
       };
     }
@@ -642,7 +643,7 @@ var require_render = __commonJS({
     function buildDirPath(item, rootPath, template) {
       const tpl = template || "{root}/{platform}/{collection}";
       const map = {
-        root: sanitizeFileName(String(rootPath || "Clipin").replace(/\/$/, ""), 60),
+        root: sanitizeFileName(String(rootPath || "savault").replace(/\/$/, ""), 60),
         platform: item.platform || "unknown",
         collection: sanitizeFileName(item.collection || "\u672A\u5206\u7C7B", 40)
       };
@@ -659,11 +660,79 @@ var require_render = __commonJS({
   }
 });
 
+// core/transcript.js
+var require_transcript = __commonJS({
+  "core/transcript.js"(exports2, module2) {
+    var SUBMIT_URL = "https://dashscope.aliyuncs.com/api/v1/services/audio/asr/transcription";
+    var TASK_URL = "https://dashscope.aliyuncs.com/api/v1/tasks/";
+    var DEFAULT_MODEL = "paraformer-v2";
+    async function transcribeViaDashscope(o) {
+      const { http, apiKey, videoUrl } = o;
+      const log = o.logger || (() => {
+      });
+      const sleep = o.sleep || ((ms) => new Promise((r) => setTimeout(r, ms)));
+      if (!apiKey) throw new Error("\u672A\u914D\u7F6E dashscope API key\uFF08\u8BBE\u7F6E\u9875 \u2192 \u8F6C\u5199\uFF09");
+      if (!videoUrl) throw new Error("\u6CA1\u6709\u53EF\u8F6C\u5199\u7684\u89C6\u9891\u5730\u5740");
+      const model = o.model || DEFAULT_MODEL;
+      const pollMs = o.pollMs || 3e3;
+      const maxWaitMs = o.maxWaitMs || 12e4;
+      const authHeaders = { "Authorization": "Bearer " + apiKey };
+      const sub = await http.json(SUBMIT_URL, {
+        method: "POST",
+        headers: { ...authHeaders, "X-DashScope-Async": "enable" },
+        body: {
+          model,
+          input: { file_urls: [videoUrl] },
+          parameters: { language_hints: ["zh", "en"] }
+        }
+      });
+      const taskId = sub && sub.output && sub.output.task_id;
+      if (!taskId) throw new Error("dashscope \u672A\u8FD4\u56DE task_id\uFF1A" + JSON.stringify(sub).slice(0, 200));
+      log("[asr] \u4EFB\u52A1\u5DF2\u63D0\u4EA4 " + taskId);
+      const deadline = Date.now() + maxWaitMs;
+      for (; ; ) {
+        if (Date.now() > deadline) throw new Error("\u8F6C\u5199\u8D85\u65F6\uFF08" + Math.round(maxWaitMs / 1e3) + "s\uFF09");
+        await sleep(pollMs);
+        const t = await http.json(TASK_URL + taskId, { headers: authHeaders });
+        const st = t && t.output && t.output.task_status;
+        if (st === "SUCCEEDED") {
+          const results = t.output && t.output.results || [];
+          const tu = results[0] && results[0].transcription_url;
+          if (!tu) throw new Error("\u4EFB\u52A1\u6210\u529F\u4F46\u65E0 transcription_url");
+          const tr = await http.json(tu, {});
+          return extractText(tr);
+        }
+        if (st === "FAILED" || st === "CANCELED") {
+          throw new Error("\u8F6C\u5199\u5931\u8D25\uFF1A" + (t.output && (t.output.message || t.output.code) || st));
+        }
+      }
+    }
+    function extractText(tr) {
+      const list = tr && tr.transcripts || [];
+      const parts = [];
+      for (const t of list) {
+        if (t.text && String(t.text).trim()) {
+          parts.push(String(t.text).trim());
+          continue;
+        }
+        const sens = Array.isArray(t.sentences) ? t.sentences : [];
+        const joined = sens.map((s) => s && s.text || "").filter(Boolean).join("\u3002");
+        if (joined) parts.push(joined);
+      }
+      const text = parts.join("\n\n").trim();
+      if (!text) throw new Error("\u8F6C\u5199\u7ED3\u679C\u4E3A\u7A7A");
+      return text;
+    }
+    module2.exports = { transcribeViaDashscope, extractText, DEFAULT_MODEL };
+  }
+});
+
 // core/engine.js
 var require_engine = __commonJS({
   "core/engine.js"(exports2, module2) {
     var { renderNote, buildFileName, buildDirPath } = require_render();
     var { summarize } = require_ai();
+    var { transcribeViaDashscope } = require_transcript();
     async function sync(opts) {
       const o = opts || {};
       const provider = o.provider;
@@ -708,7 +777,7 @@ var require_engine = __commonJS({
       const whitelist = Array.isArray(o.collections) ? o.collections.filter(Boolean) : [];
       if (whitelist.length) {
         const before = collections.length;
-        collections = collections.filter((c) => whitelist.includes(String(c.id)));
+        collections = collections.filter((c) => whitelist.includes(String(c.id)) || whitelist.includes(String(c.title)));
         log(`[engine] \u6536\u85CF\u5939\u767D\u540D\u5355\uFF1A${before} \u2192 ${collections.length}`);
       }
       if (!collections.length) collections = [{ id: "", title: "\u5168\u90E8" }];
@@ -763,6 +832,19 @@ var require_engine = __commonJS({
             }
             if (detail.transcript) item.transcript = detail.transcript;
             if (detail.content) item.content = detail.content;
+            if (!item.transcript && enrich.transcript && enrich.asr && enrich.asr.apiKey && item.videoUrl) {
+              try {
+                item.transcript = await transcribeViaDashscope({
+                  http,
+                  apiKey: enrich.asr.apiKey,
+                  videoUrl: item.videoUrl,
+                  model: enrich.asr.model,
+                  logger: log
+                });
+              } catch (e) {
+                log(`[engine] ASR \u8F6C\u5199\u5931\u8D25 ${item.sourceId}\uFF1A${e.message}\uFF08\u7B14\u8BB0\u7167\u5199\uFF0C\u65E0\u8F6C\u5199\uFF09`);
+              }
+            }
             let aiText = "";
             if (enrich.ai && enrich.ai.enabled && enrich.ai.apiKey) {
               const src = item.transcript || item.content || item.summary;
@@ -796,7 +878,7 @@ var require_engine = __commonJS({
             });
             await target.write(item, md, {
               fileName: buildFileName(item),
-              dirPath: buildDirPath(item, o.renderOpts && o.renderOpts.rootPath || "Clipin", o.renderOpts && o.renderOpts.dirTemplate)
+              dirPath: buildDirPath(item, o.renderOpts && o.renderOpts.rootPath || "savault", o.renderOpts && o.renderOpts.dirTemplate)
             });
             result.created++;
             if (remaining !== Infinity) remaining--;
@@ -1052,6 +1134,20 @@ var require_xiaohongshu = __commonJS({
       if (!Array.isArray(list)) return [];
       return list.map((img) => typeof img === "string" ? img : img && (img.url_default || img.url || img.trace || "") || "").filter(Boolean);
     }
+    function pickVideoUrl(note) {
+      const v = note.video;
+      if (!v) return "";
+      const stream = v.media && v.media.stream || v.stream || {};
+      for (const q of ["h264", "h265", "av1"]) {
+        const arr = stream[q];
+        if (!Array.isArray(arr)) continue;
+        for (const s of arr) {
+          const u = s && (s.master_url || s.masterUrl || Array.isArray(s.backup_urls) && s.backup_urls[0] || s.url);
+          if (u) return u;
+        }
+      }
+      return v.play_url || v.url || "";
+    }
     var xiaohongshu = {
       id: "xiaohongshu",
       name: "\u5C0F\u7EA2\u4E66",
@@ -1076,12 +1172,36 @@ var require_xiaohongshu = __commonJS({
         }
       ],
       capabilities: {
-        collections: false,
-        // 收藏专辑需要额外接口，v1 先不做
-        transcript: false,
-        // 图文笔记没有逐字稿；视频笔记的口播暂不支持
+        collections: true,
+        // 收藏专辑：webview 按标题点进专辑页取数（id 即标题，见 listCollections）
+        transcript: true,
+        // 视频笔记口播走 dashscope ASR（engine 富化阶段，见 core/transcript.js）
         media: true,
         loginUrl: WEB
+      },
+      /**
+       * 列收藏专辑（webview 模式）。
+       * 小红书专辑列表接口带签名，我们不调接口——打开主页「收藏」标签，
+       * 宽拦截 /api/sns/web/ 的响应，按结构嗅探出专辑列表。
+       * 返回的 id 就是标题：取数时靠标题点击专辑卡片导航，不需要知道接口长什么样。
+       */
+      async listCollections({ auth, webviewHost, logger }) {
+        const log = logger || (() => {
+        });
+        if (!webviewHost) throw new Error("\u5217\u4E13\u8F91\u9700\u8981\u5185\u5D4C\u6D4F\u89C8\u5668\uFF08Obsidian \u684C\u9762\u7AEF\uFF09");
+        if (!auth || !auth.userId) throw new Error("\u8BF7\u5148\u767B\u5F55\u5C0F\u7EA2\u4E66\uFF08\u8BBE\u7F6E\u9875 \u2192 \u767B\u5F55\u5C0F\u7EA2\u4E66\uFF09");
+        const profileUrl = `${WEB}/user/profile/${auth.userId}`;
+        await webviewHost.goto(profileUrl, { waitUntil: "dom-ready", timeoutMs: 3e4 });
+        await webviewHost.clearCaptured();
+        await webviewHost.reinject("/api/sns/web/");
+        await webviewHost.clickByText({ selector: '.reds-tab, .feeds-tab, [class*="tab-item"]', text: "\u6536\u85CF" });
+        await webviewHost.sleep(2500);
+        await webviewHost.scrollToBottom();
+        await webviewHost.sleep(1500);
+        const captured = await webviewHost.getCaptured();
+        const albums = extractAlbums(captured);
+        log(`[xhs] \u55C5\u63A2\u5230 ${albums.length} \u4E2A\u4E13\u8F91\uFF08\u6765\u81EA ${captured.length} \u4E2A\u54CD\u5E94\uFF09`);
+        return albums.map((a) => ({ id: a.title, title: a.title, count: a.count || 0 }));
       },
       /** 校验登录：webview 模式下以页面能否拿到用户信息为准 */
       async validate({ auth, http, webviewHost }) {
@@ -1094,19 +1214,31 @@ var require_xiaohongshu = __commonJS({
       /**
        * webview 拦截取数。
        * 宿主（Obsidian 插件）负责具体的 webview 操作，provider 只描述"要什么"。
+       * 传了 collectionTitle 就只取那个专辑：点进专辑卡片再滚动拦截。
        */
-      async collectViaWebview({ webviewHost, auth, logger, maxScrolls }) {
+      async collectViaWebview({ webviewHost, auth, logger, maxScrolls, collectionTitle }) {
         const log = logger || (() => {
         });
         if (!auth || !auth.userId) throw new Error("\u8BF7\u5148\u767B\u5F55\u5C0F\u7EA2\u4E66\uFF08\u8BBE\u7F6E\u9875 \u2192 \u767B\u5F55\u5C0F\u7EA2\u4E66\uFF09");
+        const albumTitle = collectionTitle && collectionTitle !== "\u5168\u90E8" ? collectionTitle : "";
         const profileUrl = `${WEB}/user/profile/${auth.userId}`;
-        log("[xhs] \u6253\u5F00\u6536\u85CF\u9875\uFF1A" + profileUrl);
-        const captured = await webviewHost.captureResponses({
-          urlPattern: COLLECT_API_PATTERN,
+        const pattern = albumTitle ? "/api/sns/web/" : COLLECT_API_PATTERN;
+        log("[xhs] \u6253\u5F00\u6536\u85CF\u9875\uFF1A" + profileUrl + (albumTitle ? `\uFF08\u4E13\u8F91\uFF1A${albumTitle}\uFF09` : ""));
+        const capturedBodies = await webviewHost.captureResponses({
+          urlPattern: pattern,
           // 2) 打开个人主页
           async navigate() {
             await webviewHost.goto(profileUrl, { waitUntil: "dom-ready", timeoutMs: 3e4 });
             await webviewHost.clickByText({ selector: '.reds-tab, .feeds-tab, [class*="tab-item"]', text: "\u6536\u85CF" });
+            if (albumTitle) {
+              await webviewHost.sleep(2e3);
+              const clicked = await webviewHost.clickByText({
+                selector: '[class*="board"], [class*="album"], [class*="collect"] a, a, div',
+                text: albumTitle
+              });
+              if (!clicked) throw new Error(`\u6CA1\u627E\u5230\u4E13\u8F91\u300C${albumTitle}\u300D\uFF08\u5148\u5728\u8BBE\u7F6E\u91CC\u62C9\u4E00\u6B21\u4E13\u8F91\u5217\u8868\u6838\u5BF9\u540D\u5B57\uFF09`);
+              await webviewHost.sleep(2500);
+            }
           },
           // 4) 滚动加载，直到没有新数据或到达上限
           async drive() {
@@ -1121,15 +1253,17 @@ var require_xiaohongshu = __commonJS({
         });
         const items = [];
         const seen = /* @__PURE__ */ new Set();
-        for (const body of captured) {
-          const notes = body && body.data && body.data.notes || [];
-          for (const n of notes) {
-            if (!n || !n.note_id || seen.has(n.note_id)) continue;
-            seen.add(n.note_id);
-            items.push(normalizeNote(n));
+        for (const body of capturedBodies) {
+          for (const n of extractNotes(body)) {
+            const nid = n.note_id || n.id || "";
+            if (!nid || seen.has(nid)) continue;
+            seen.add(nid);
+            const it = normalizeNote(n);
+            if (albumTitle) it.collection = albumTitle;
+            items.push(it);
           }
         }
-        log(`[xhs] \u62E6\u622A\u5230 ${captured.length} \u4E2A\u54CD\u5E94\uFF0C\u53BB\u91CD\u540E ${items.length} \u6761`);
+        log(`[xhs] \u62E6\u622A\u5230 ${capturedBodies.length} \u4E2A\u54CD\u5E94\uFF0C\u53BB\u91CD\u540E ${items.length} \u6761`);
         return items;
       },
       /** 解析单元（供测试与未来 direct 模式复用） */
@@ -1138,6 +1272,59 @@ var require_xiaohongshu = __commonJS({
       pickCover,
       pickImages
     };
+    function extractAlbums(captured) {
+      const out = [];
+      const seen = /* @__PURE__ */ new Set();
+      for (const c of captured || []) {
+        const body = c && c.body !== void 0 ? c.body : c;
+        walkJson(body, (node) => {
+          if (!Array.isArray(node) || !node.length) return;
+          for (const it of node) {
+            if (!it || typeof it !== "object" || Array.isArray(it)) continue;
+            const title = it.name || it.title || it.board_name || "";
+            const id = it.id || it.board_id || it.boardId || "";
+            const count = Number(it.notes_count ?? it.note_count ?? it.count ?? it.total) || 0;
+            if (title && (id || count) && !it.note_card && !it.note_id && it.desc === void 0) {
+              const key = String(id || title);
+              if (!seen.has(key)) {
+                seen.add(key);
+                out.push({ id: key, title: String(title), count });
+              }
+            }
+          }
+        });
+      }
+      return out;
+    }
+    function extractNotes(body) {
+      const out = [];
+      walkJson(body, (node) => {
+        if (!node || typeof node !== "object" || Array.isArray(node)) return;
+        if (node.note_card && typeof node.note_card === "object") {
+          const nc = node.note_card;
+          out.push({
+            ...nc,
+            note_id: nc.note_id || nc.id || node.id || "",
+            xsec_token: node.xsec_token || nc.xsec_token || ""
+          });
+          return;
+        }
+        if (node.note_id && (node.display_title !== void 0 || node.title !== void 0 || node.desc !== void 0 || node.user)) {
+          out.push(node);
+        }
+      });
+      return out;
+    }
+    function walkJson(node, visit, depth) {
+      if (depth === void 0) depth = 0;
+      if (depth > 8 || node === null || typeof node !== "object") return;
+      visit(node);
+      if (Array.isArray(node)) {
+        for (const it of node) walkJson(it, visit, depth + 1);
+        return;
+      }
+      for (const k of Object.keys(node)) walkJson(node[k], visit, depth + 1);
+    }
     function normalizeNote(n) {
       const nid = n.note_id || n.id || "";
       const title = n.display_title || n.title || n.desc || "";
@@ -1162,12 +1349,16 @@ var require_xiaohongshu = __commonJS({
         collection: "\u6536\u85CF",
         content: n.desc || "",
         media: images,
+        videoUrl: pickVideoUrl(n),
         raw: n
       });
     }
     module2.exports = xiaohongshu;
     module2.exports.COLLECT_API_PATTERN = COLLECT_API_PATTERN;
     module2.exports.parseCount = parseCount;
+    module2.exports.pickVideoUrl = pickVideoUrl;
+    module2.exports.extractAlbums = extractAlbums;
+    module2.exports.extractNotes = extractNotes;
   }
 });
 
@@ -2297,6 +2488,7 @@ var require_core = __commonJS({
     var html2md = require_html2md();
     var render = require_render();
     var engine = require_engine();
+    var transcript = require_transcript();
     var bilibili = require_bilibili();
     var xiaohongshu = require_xiaohongshu();
     var xiaoyuzhou = require_xiaoyuzhou();
@@ -2319,6 +2511,7 @@ var require_core = __commonJS({
       ...html2md,
       ...render,
       ...engine,
+      ...transcript,
       createHttp,
       // 检索与对话（search / chat 为函数，命名空间用 searchMod / chatMod 防重名）
       ...vaultIndex,
@@ -2349,10 +2542,12 @@ var require_core = __commonJS({
 var require_webview_host = __commonJS({
   "plugin/webview-host.js"(exports2, module2) {
     var INJECT_SCRIPT = `(function(){
-  if (window.__clipin_installed) return 'already';
-  window.__clipin_installed = true;
-  window.__clipin_captured = [];
   var PAT = %PATTERN%;
+  // \u5DF2\u88C5\u8FC7\u4E14 pattern \u6CA1\u53D8\u624D\u8DF3\u8FC7\uFF1Bpattern \u53D8\u4E86\uFF08\u6BD4\u5982\u4ECE\u6536\u85CF\u5217\u8868\u5207\u5230\u5BBD\u5339\u914D\u55C5\u63A2\uFF09\u8981\u6362\u88C5
+  if (window.__clipin_installed && window.__clipin_pat === PAT) return 'already';
+  window.__clipin_installed = true;
+  window.__clipin_pat = PAT;
+  window.__clipin_captured = [];
   function push(url, text){
     try{
       if (!text) return;
@@ -2492,6 +2687,19 @@ var require_webview_host = __commonJS({
           await pull();
           return Date.now() - lastCaptureAt > (ms || 8e3);
         },
+        /** 取回完整捕获（含 URL——专辑发现要靠 URL 辨认接口） */
+        async getCaptured() {
+          return await pull();
+        },
+        /** 清空捕获（切专辑/切页面时调用，防止上一个页面的数据混进来） */
+        async clearCaptured() {
+          try {
+            await webview.executeJavaScript('window.__clipin_captured = []; "ok"');
+          } catch (e) {
+          }
+          lastCount = 0;
+          lastCaptureAt = Date.now();
+        },
         /** 当前页面 URL */
         async url() {
           try {
@@ -2564,10 +2772,13 @@ var DEFAULT_SETTINGS = {
   },
   target: {
     type: "obsidian",
-    obsidian: { savePath: "\u77E5\u8BC6\u6865\u6881/", localizeCover: true, dirTemplate: "{root}/{platform}/{collection}", linkAuthor: true },
+    // 默认目录用英文：中文目录名在部分同步工具/插件生态里出过 bug（用户 2026-09-03 拍板）
+    obsidian: { savePath: "savault/", localizeCover: true, dirTemplate: "{root}/{platform}/{collection}", linkAuthor: true },
     notion: { token: "", parentId: "", parentType: "data_source_id", uploadImages: false }
   },
   ai: { enabled: false, baseUrl: "https://api.deepseek.com", key: "", model: "deepseek-chat" },
+  // 口播转写（pro）：阿里云百炼 dashscope API key，Paraformer 直接吃视频 URL，不用下载
+  dashscopeKey: "",
   // 问收藏（AI 对话）：参考条数与记忆轮数
   chatTopK: 8,
   chatMaxTurns: 6,
@@ -2833,6 +3044,7 @@ var ClipinPlugin = class extends Plugin {
         quota: { max: FREE_QUOTA, used: this.settings.syncedCount || 0, isPro },
         enrich: {
           transcript: isPro && this.settings.fetchTranscript,
+          asr: { apiKey: this.settings.dashscopeKey || "", model: "" },
           detail: true,
           ai: isPro && this.settings.ai.enabled ? { enabled: true, baseUrl: this.settings.ai.baseUrl, apiKey: this.settings.ai.key, model: this.settings.ai.model } : { enabled: false }
         },
@@ -3301,6 +3513,12 @@ var ClipinSettingTab = class extends PluginSettingTab {
             this.display();
           }));
         }
+        if (p.capabilities && p.capabilities.collections) {
+          new Setting(containerEl).setName("\u3000\u53EA\u540C\u6B65\u6307\u5B9A\u4E13\u8F91").setDesc("\u586B\u4E13\u8F91\u540D\uFF0C\u9017\u53F7\u5206\u9694\uFF08\u5982\uFF1A\u79D1\u6280, \u6548\u7387\u5DE5\u5177\uFF09\u3002\u7559\u7A7A = \u540C\u6B65\u5168\u90E8\u6536\u85CF").addText((t) => t.setPlaceholder("\u7559\u7A7A\u540C\u6B65\u5168\u90E8").setValue((cfg.collections || []).join(", ")).onChange(async (v) => {
+            cfg.collections = v.split(/[,，]/).map((x) => x.trim()).filter(Boolean);
+            await plugin.saveSettings();
+          }));
+        }
         new Setting(containerEl).setName("\u3000\u7ACB\u5373\u540C\u6B65").setDesc(`\u628A ${p.name} \u7684\u6536\u85CF\u540C\u6B65\u5230${s.target.type === "notion" ? " Notion" : " Obsidian"}`).addButton((b) => b.setButtonText("\u540C\u6B65").onClick(async () => {
           b.setButtonText("\u540C\u6B65\u4E2D\u2026").setDisabled(true);
           try {
@@ -3312,10 +3530,19 @@ var ClipinSettingTab = class extends PluginSettingTab {
       }
     }
     containerEl.createEl("h2", { text: "\u589E\u5F3A\u529F\u80FD\uFF08\u6C38\u4E45\u7248\uFF09" });
-    new Setting(containerEl).setName("\u540C\u6B65\u9010\u5B57\u7A3F").setDesc(pro ? "\u6293\u53D6\u5B57\u5E55\u5199\u5165\u7B14\u8BB0\uFF08\u6BCF\u4E2A\u6761\u76EE\u591A 2-3 \u6B21\u8BF7\u6C42\uFF0C\u4F1A\u6162\u4E00\u4E9B\uFF09" : "\u6C38\u4E45\u7248\u529F\u80FD").addToggle((g) => g.setValue(pro && s.fetchTranscript).setDisabled(!pro).onChange(async (v) => {
+    new Setting(containerEl).setName("\u540C\u6B65\u9010\u5B57\u7A3F").setDesc(pro ? "\u6293\u53D6\u5B57\u5E55\u5199\u5165\u7B14\u8BB0\uFF08\u6BCF\u4E2A\u6761\u76EE\u591A 2-3 \u6B21\u8BF7\u6C42\uFF0C\u4F1A\u6162\u4E00\u4E9B\uFF09\uFF1B\u5C0F\u7EA2\u4E66\u89C6\u9891\u8D70\u53E3\u64AD\u8F6C\u5199\uFF08\u9700\u914D dashscope key\uFF09" : "\u6C38\u4E45\u7248\u529F\u80FD").addToggle((g) => g.setValue(pro && s.fetchTranscript).setDisabled(!pro).onChange(async (v) => {
       s.fetchTranscript = v;
       await plugin.saveSettings();
     }));
+    if (pro) {
+      new Setting(containerEl).setName("\u3000\u53E3\u64AD\u8F6C\u5199 dashscope Key").setDesc("\u5C0F\u7EA2\u4E66\u89C6\u9891\u7B14\u8BB0\u7528\uFF1A\u963F\u91CC\u4E91\u767E\u70BC API key\uFF08Paraformer \u76F4\u63A5\u8BFB\u89C6\u9891 URL\uFF0C\u4E0D\u4E0B\u8F7D\u89C6\u9891\uFF09\u3002\u53EA\u5B58\u672C\u5730").addText((t) => {
+        t.setPlaceholder("sk-...").setValue(s.dashscopeKey || "").onChange(async (v) => {
+          s.dashscopeKey = v.trim();
+          await plugin.saveSettings();
+        });
+        t.inputEl.type = "password";
+      });
+    }
     new Setting(containerEl).setName("AI \u603B\u7ED3").setDesc(pro ? "\u7528\u4F60\u81EA\u5DF1\u7684 key \u8C03\u7528\u6A21\u578B\uFF0C\u81EA\u52A8\u751F\u6210\u6838\u5FC3\u89C2\u70B9/\u8981\u70B9/\u91D1\u53E5" : "\u6C38\u4E45\u7248\u529F\u80FD").addToggle((g) => g.setValue(pro && s.ai.enabled).setDisabled(!pro).onChange(async (v) => {
       s.ai.enabled = v;
       await plugin.saveSettings();
