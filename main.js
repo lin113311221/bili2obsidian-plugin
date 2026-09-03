@@ -858,6 +858,7 @@ var require_engine = __commonJS({
             }
             if (enrich.transcript && detail.transcript) item.transcript = detail.transcript;
             if (detail.content) item.content = detail.content;
+            if (detail.videoUrl && !item.videoUrl) item.videoUrl = detail.videoUrl;
             if (!item.transcript && enrich.transcript && enrich.asr && enrich.asr.apiKey && item.videoUrl) {
               try {
                 item.transcript = await transcribeViaDashscope({
@@ -1334,6 +1335,49 @@ var require_xiaohongshu = __commonJS({
           throw new Error("\u6CA1\u6709\u8BFB\u5230\u4E13\u8F91\u5217\u8868\uFF08\u9875\u9762\u6CA1\u8FD4\u56DE\u4E13\u8F91\u63A5\u53E3\uFF0C\u53EF\u80FD\u6539\u7248\u6216\u672A\u52A0\u8F7D\u5B8C\uFF09\u3002\u53EF\u91CD\u8BD5\u4E00\u6B21\uFF1B\u6216\u5728\u63A5\u4E0B\u6765\u7684\u9009\u62E9\u6846\u91CC\u624B\u52A8\u586B\u4E13\u8F91\u540D");
         }
         return albums.map((a) => ({ id: a.title, title: a.title, count: a.count || 0 }));
+      },
+      /**
+       * 详情补齐（pro 转写链路的关键一环，v0.5.28）。
+       *
+       * 为什么要这个：列表/专辑接口返回的笔记卡片**不带视频流地址**
+       * （pickVideoUrl 拿到空串），engine 的 ASR 闸门 `item.videoUrl` 过不去 →
+       * 视频笔记永远没有转写。视频流地址只存在于**详情页**的 feed 接口
+       * （/api/sns/web/v1/feed，HTML 页面同样不做签名校验，浏览器自己带签名）。
+       *
+       * 做法：webview 导航到笔记详情页（item.url 已带 xsec_token），拦截 feed 响应，
+       * 从 noteCard 里取完整 desc + 视频流。只对视频笔记做（图文列表数据已足够），
+       * 每个视频一次页面导航，成本可控。
+       *
+       * @returns {Promise<{content?, videoUrl?, media?, error?}>}
+       */
+      async fetchDetail({ webviewHost, item, logger }) {
+        const log = logger || (() => {
+        });
+        if (!webviewHost) return {};
+        if (!item || !item.raw || !item.raw.video) return {};
+        const bodies = await webviewHost.captureResponses({
+          urlPattern: "/api/sns/web/v1/feed",
+          async navigate() {
+            await webviewHost.goto(item.url, { waitUntil: "dom-ready", timeoutMs: 3e4 });
+          },
+          async drive() {
+            await webviewHost.sleep(2600);
+          }
+        });
+        for (const body of bodies || []) {
+          const items = body && body.data && body.data.items || [];
+          for (const it of items) {
+            const n = it && it.noteCard;
+            if (!n) continue;
+            if ((n.note_id || item.id) !== item.id) continue;
+            const videoUrl = pickVideoUrl(n);
+            log(`[xhs] \u8BE6\u60C5\u8865\u9F50 ${item.id}\uFF1Adesc=${(n.desc || "").length}\u5B57 videoUrl=${videoUrl ? "\u6709" : "\u65E0"}`);
+            const out = { content: n.desc || item.content, videoUrl, media: pickImages(n) };
+            if (!videoUrl) out.error = "\u8BE6\u60C5\u63A5\u53E3\u6CA1\u7ED9\u89C6\u9891\u6D41\u5730\u5740";
+            return out;
+          }
+        }
+        return { error: "\u8BE6\u60C5\u9875\u6CA1\u62E6\u5230 feed \u54CD\u5E94\uFF08\u9875\u9762\u6CA1\u52A0\u8F7D\u5B8C\u6216\u6539\u7248\uFF09" };
       },
       /** 校验登录：webview 模式下以页面能否拿到用户信息为准 */
       async validate({ auth, http, webviewHost }) {
@@ -5132,10 +5176,16 @@ function makeRequest() {
       body: o.body,
       throw: false
     });
+    let json = null;
+    try {
+      json = r.json;
+    } catch (_) {
+      json = null;
+    }
     return {
       status: r.status,
       headers: r.headers || {},
-      json: r.json,
+      json,
       text: r.text,
       arrayBuffer: r.arrayBuffer
     };
