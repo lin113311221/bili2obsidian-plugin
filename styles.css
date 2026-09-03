@@ -4,11 +4,13 @@
 .clipin-login-modal,
 .clipin-browser-modal {
   width: 78vw;
-  max-width: 1100px;
-  min-width: 640px;
+  max-width: 1080px;       /* 留点余量，避免按钮被裁 */
+  min-width: 560px;
   display: flex;
   flex-direction: column;
-  max-height: 82vh;   /* 弹窗整体限高，避免在某些分辨率下撑到屏幕外 */
+  max-height: 82vh;        /* 弹窗整体限高，避免在某些分辨率下撑到屏幕外 */
+  box-sizing: border-box;  /* width 不被 padding 撑爆 */
+  padding: 0 4px;          /* 给按钮左右安全间距，别让它们贴到视口边 */
 }
 
 /* h3 + tip 文字占顶部自然高度 */
@@ -28,13 +30,19 @@
   background: var(--background-secondary);
 }
 
-/* 弹窗底部按钮行：flex:0 保证不被压缩，永远紧贴底部 */
+/* 弹窗底部按钮行：水平居中，避免被推到视口右边缘外；
+   flex:0 保证不被 webview 挤掉，padding 给按钮左右安全间距 */
 .clipin-btn-row {
   display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  margin-top: 12px;
+  justify-content: center;       /* 居中：永远不贴边，绝对不会被裁 */
+  align-items: center;
+  gap: 12px;
+  margin-top: 14px;
+  padding: 4px 8px 0;
   flex: 0 0 auto;
+}
+.clipin-btn-row button {
+  min-width: 110px;              /* 按钮有可点击的最小宽度，不会太窄 */
 }
 
 /* 设置页 */

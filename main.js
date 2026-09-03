@@ -2856,11 +2856,12 @@ function makeRequest() {
   };
 }
 function makeWebviewEl(contentEl, partitionId, src, cls) {
-  const wv = contentEl.createEl("webview");
+  const wv = document.createElement("webview");
   wv.setAttribute("partition", partitionId);
   wv.setAttribute("allowpopups", "");
-  if (cls) wv.addClass(cls);
-  wv.setAttribute("src", src);
+  if (cls) wv.setAttribute("class", cls);
+  wv.setAttribute("src", src || "about:blank");
+  contentEl.appendChild(wv);
   return wv;
 }
 function webviewCanAccessWebContents(wv) {
