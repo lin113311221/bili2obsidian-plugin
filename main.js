@@ -2991,6 +2991,7 @@ var LoginModal = class extends Modal {
     }
   }
   onClose() {
+    this.plugin._log("info", "[login] \u767B\u5F55\u7A97\u53E3\u5DF2\u5173\u95ED");
     this.contentEl.empty();
   }
 };
@@ -3070,39 +3071,41 @@ var ClipinPlugin = class extends Plugin {
       const logPath = path.join(base, this.logFilePath);
       if (!fs.existsSync(logPath)) return;
       const lines = fs.readFileSync(logPath, "utf8").slice(-2e4).split("\n").filter(Boolean);
-      let lastLoadIdx = -1;
+      const WEBVIEW_RE = /打开登录窗口|打开读取窗口|did-start-loading|dom-ready|will-navigate|\[webview\]|\[login\]|\[browser\]/;
+      let lastWebviewIdx = -1, lastUnloadIdx = -1;
       for (let i = lines.length - 1; i >= 0; i--) {
-        if (lines[i].includes("\u63D2\u4EF6\u5DF2\u52A0\u8F7D")) {
-          lastLoadIdx = i;
-          break;
-        }
+        if (lastUnloadIdx < 0 && lines[i].includes("\u63D2\u4EF6\u5378\u8F7D")) lastUnloadIdx = i;
+        if (lastWebviewIdx < 0 && WEBVIEW_RE.test(lines[i])) lastWebviewIdx = i;
+        if (lastUnloadIdx >= 0 && lastWebviewIdx >= 0) break;
       }
-      if (lastLoadIdx < 0) return;
-      const after = lines.slice(lastLoadIdx + 1);
-      if (after.some((l) => l.includes("\u63D2\u4EF6\u5378\u8F7D"))) return;
-      const lastLine = lines[lines.length - 1] || "";
-      const diedMidActivity = /did-start-loading|dom-ready|will-navigate|unresponsive|did-stop-loading|\[webview\]|\[login\]|\[browser\]|开始同步/.test(lastLine);
-      if (!diedMidActivity) return;
-      const appdata = process.env.APPDATA;
-      if (!appdata) return;
-      const partRoot = path.join(appdata, "obsidian", "Partitions");
-      if (!fs.existsSync(partRoot)) return;
-      const stamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-").slice(0, 19);
-      const moved = [];
-      for (const name of fs.readdirSync(partRoot)) {
-        if (!name.startsWith("clipin-")) continue;
-        try {
-          fs.renameSync(path.join(partRoot, name), path.join(partRoot, `${name}.crashed-${stamp}`));
-          moved.push(name);
-        } catch (_) {
-        }
-      }
-      if (moved.length) {
-        this._log("error", `\u68C0\u6D4B\u5230\u4E0A\u6B21\u5728\u5185\u5D4C\u6D4F\u89C8\u5668\u4F7F\u7528\u4E2D\u5F02\u5E38\u9000\u51FA\uFF0C\u5DF2\u81EA\u52A8\u91CD\u7F6E\u6D4F\u89C8\u5668\u6570\u636E\uFF08${moved.join(", ")} \u2192 .crashed-${stamp}\uFF09\uFF1B\u9700\u91CD\u65B0\u767B\u5F55\u4E00\u6B21`);
-        setTimeout(() => new Notice("Savault\uFF1A\u68C0\u6D4B\u5230\u4E0A\u6B21\u5185\u5D4C\u6D4F\u89C8\u5668\u5F02\u5E38\u9000\u51FA\uFF0C\u5DF2\u81EA\u52A8\u91CD\u7F6E\u5176\u7F13\u5B58\u6570\u636E\uFF08\u767B\u5F55\u6001\u9700\u91CD\u65B0\u767B\u5F55\u4E00\u6B21\uFF09\u3002", 9e3), 1500);
-      }
+      if (lastWebviewIdx < 0 || lastWebviewIdx < lastUnloadIdx) return;
+      this._quarantinePartitions("\u68C0\u6D4B\u5230\u4E0A\u6B21\u5728\u5185\u5D4C\u6D4F\u89C8\u5668\u4F7F\u7528\u4E2D\u5F02\u5E38\u9000\u51FA");
     } catch (_) {
     }
+  }
+  /** 把 persist:clipin-* 分区改名隔离（不删，留底可查）。供自愈与设置页手动重置共用。 */
+  _quarantinePartitions(reason) {
+    const fs = require("fs");
+    const path = require("path");
+    const appdata = process.env.APPDATA;
+    if (!appdata) return [];
+    const partRoot = path.join(appdata, "obsidian", "Partitions");
+    if (!fs.existsSync(partRoot)) return [];
+    const stamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-").slice(0, 19);
+    const moved = [];
+    for (const name of fs.readdirSync(partRoot)) {
+      if (!name.startsWith("clipin-") || name.includes(".crashed-") || name.includes(".manual-")) continue;
+      try {
+        fs.renameSync(path.join(partRoot, name), path.join(partRoot, `${name}.crashed-${stamp}`));
+        moved.push(name);
+      } catch (_) {
+      }
+    }
+    if (moved.length) {
+      this._log("error", `${reason}\uFF0C\u5DF2\u91CD\u7F6E\u6D4F\u89C8\u5668\u6570\u636E\uFF08${moved.join(", ")} \u2192 .crashed-${stamp}\uFF09\uFF1B\u9700\u91CD\u65B0\u767B\u5F55\u4E00\u6B21`);
+      setTimeout(() => new Notice(`Savault\uFF1A${reason}\uFF0C\u5DF2\u81EA\u52A8\u91CD\u7F6E\u5185\u5D4C\u6D4F\u89C8\u5668\u6570\u636E\uFF08\u9700\u91CD\u65B0\u767B\u5F55\u4E00\u6B21\uFF09\u3002`, 9e3), 1500);
+    }
+    return moved;
   }
   /* ---------- 落盘日志：渲染进程 console 不进 obsidian.log，报错写 sync.log 才能排查 ---------- */
   get logFilePath() {
@@ -3705,6 +3708,7 @@ var BrowserModal = class extends Modal {
     }));
   }
   onClose() {
+    this.plugin._log("info", "[browser] \u8BFB\u53D6\u7A97\u53E3\u5DF2\u5173\u95ED");
     this.contentEl.empty();
     if (!this.closed) {
       this.closed = true;
@@ -3971,6 +3975,20 @@ var ClipinSettingTab = class extends PluginSettingTab {
       const n = parseInt(v, 10);
       s.syncIntervalMin = isNaN(n) ? 60 : Math.max(0, n);
       await plugin.saveSettings();
+    }));
+    containerEl.createEl("h2", { text: "\u6545\u969C\u6392\u67E5" });
+    new Setting(containerEl).setName("\u91CD\u7F6E\u5185\u5D4C\u6D4F\u89C8\u5668\u6570\u636E").setDesc("\u70B9\u300C\u767B\u5F55\u300D/\u5F00\u540C\u6B65\u7A97\u53E3\u5C31\u95EA\u9000\u65F6\u7528\uFF1A\u6E05\u6389\u5185\u5D4C\u6D4F\u89C8\u5668\u7684\u7F13\u5B58\u4E0E\u767B\u5F55\u6001\uFF08\u65E7\u6570\u636E\u6539\u540D\u7559\u5E95\u4E0D\u5220\u9664\uFF09\uFF0C\u7136\u540E\u4ECE\u5E72\u51C0\u72B6\u6001\u91CD\u5EFA\u3002\u9700\u5148\u5173\u95ED\u6240\u6709\u540C\u6B65/\u767B\u5F55\u7A97\u53E3").addButton((b) => b.setButtonText("\u7ACB\u5373\u91CD\u7F6E").setWarning().onClick(() => {
+      const moved = plugin._quarantinePartitions("\u624B\u52A8\u91CD\u7F6E");
+      new Notice(moved.length ? `\u5DF2\u91CD\u7F6E\uFF08${moved.join(", ")}\uFF09\u3002\u4E0B\u6B21\u6253\u5F00\u767B\u5F55/\u540C\u6B65\u7A97\u53E3\u5C06\u4ECE\u5E72\u51C0\u72B6\u6001\u5F00\u59CB\uFF0C\u9700\u91CD\u65B0\u767B\u5F55\u4E00\u6B21` : "\u6CA1\u6709\u53EF\u91CD\u7F6E\u7684\u6D4F\u89C8\u5668\u6570\u636E\uFF08\u6216\u6587\u4EF6\u6B63\u88AB\u5360\u7528\u2014\u2014\u8BF7\u5148\u5173\u95ED\u6240\u6709\u767B\u5F55/\u540C\u6B65\u7A97\u53E3\u518D\u8BD5\uFF09");
+    }));
+    new Setting(containerEl).setName("\u8BCA\u65AD\u65E5\u5FD7").setDesc("\u51FA\u9519/\u95EA\u9000\u540E\u628A\u63D2\u4EF6\u76EE\u5F55\u4E0B\u7684 sync.log \u53D1\u7ED9\u5F00\u53D1\u8005\uFF0C\u91CC\u9762\u8BB0\u5F55\u4E86\u5D29\u6E83\u524D\u6BCF\u4E00\u6B65").addButton((b) => b.setButtonText("\u6253\u5F00\u63D2\u4EF6\u76EE\u5F55").onClick(() => {
+      try {
+        const path = require("path");
+        const base = plugin.app.vault.adapter.getBasePath();
+        require("electron").shell.openPath(path.join(base, plugin.app.vault.configDir || ".obsidian", "plugins", "savault"));
+      } catch (e) {
+        new Notice("\u6253\u5F00\u5931\u8D25\uFF1A" + e.message);
+      }
     }));
   }
 };
