@@ -786,7 +786,13 @@ var require_engine = __commonJS({
         try {
           collections = await provider.listCollections({ auth: o.auth, http, webviewHost: o.webviewHost });
         } catch (e) {
-          log("[engine] \u83B7\u53D6\u6536\u85CF\u5939\u5931\u8D25\uFF1A" + e.message);
+          const why = e && e.message ? e.message : String(e);
+          log("[engine] \u83B7\u53D6\u6536\u85CF\u5939\u5217\u8868\u5931\u8D25\uFF1A" + why);
+          if (whitelist.length) {
+            result.errors.push(`\u83B7\u53D6\u6536\u85CF\u5939\u5217\u8868\u5931\u8D25\uFF1A${why}`);
+            result.failed = -1;
+            return result;
+          }
           collections = [];
         }
       }
@@ -1224,6 +1230,9 @@ var require_xiaohongshu = __commonJS({
         const captured = await webviewHost.getCaptured();
         const albums = extractAlbums(captured);
         log(`[xhs] \u55C5\u63A2\u5230 ${albums.length} \u4E2A\u4E13\u8F91\uFF08\u6765\u81EA ${captured.length} \u4E2A\u54CD\u5E94\uFF09`);
+        if (!albums.length) {
+          throw new Error("\u6CA1\u6709\u8BFB\u5230\u4E13\u8F91\u5217\u8868\u2014\u2014\u591A\u534A\u662F\u6D4F\u89C8\u5668\u7A97\u53E3\u91CC\u8FD8\u6CA1\u767B\u5F55\uFF08\u6536\u85CF\u9875\u8981\u767B\u5F55\u624D\u80FD\u770B\uFF09\uFF0C\u8BF7\u767B\u5F55\u540E\u91CD\u65B0\u70B9\u300C\u9009\u62E9\u4E13\u8F91\u300D");
+        }
         return albums.map((a) => ({ id: a.title, title: a.title, count: a.count || 0 }));
       },
       /** 校验登录：webview 模式下以页面能否拿到用户信息为准 */
@@ -2846,6 +2855,17 @@ function makeRequest() {
     };
   };
 }
+function makeWebviewEl(contentEl, partitionId, src, cls) {
+  const wv = contentEl.createEl("webview");
+  wv.setAttribute("partition", partitionId);
+  wv.setAttribute("allowpopups", "");
+  if (cls) wv.addClass(cls);
+  wv.setAttribute("src", src);
+  return wv;
+}
+function webviewCanAccessWebContents(wv) {
+  return !!(wv && typeof wv.getWebContents === "function");
+}
 var LoginModal = class extends Modal {
   /**
    * @param {App} app
@@ -2869,11 +2889,7 @@ var LoginModal = class extends Modal {
       text: "\u5728\u4E0B\u65B9\u7A97\u53E3\u4E2D\u767B\u5F55\u540E\uFF0C\u70B9\u51FB\u300C\u63D0\u53D6\u767B\u5F55\u6001\u300D\u3002",
       cls: "clipin-tip"
     });
-    this.webview = contentEl.createEl("webview");
-    this.webview.setAttribute("src", p.capabilities.loginUrl || "about:blank");
-    this.webview.setAttribute("allowpopups", "");
-    this.webview.setAttribute("partition", `persist:clipin-${p.id}`);
-    this.webview.addClass("clipin-webview");
+    this.webview = makeWebviewEl(contentEl, `persist:clipin-${p.id}`, p.capabilities.loginUrl || "about:blank", "clipin-webview");
     const row = contentEl.createDiv({ cls: "clipin-btn-row" });
     const btn = row.createEl("button", { text: "\u63D0\u53D6\u767B\u5F55\u6001" });
     btn.addClass("mod-cta");
@@ -2893,6 +2909,11 @@ var LoginModal = class extends Modal {
   async extract() {
     const p = this.provider;
     try {
+      if (!webviewCanAccessWebContents(this.webview)) {
+        const msg = p.id === "bilibili" ? "\u5F53\u524D\u73AF\u5883\u4E0D\u652F\u6301\u81EA\u52A8\u63D0\u53D6\u3002\u8BF7\u5728\u4E0A\u65B9\u7A97\u53E3\u767B\u5F55\u540E\uFF0C\u6309 F12 \u2192 Application \u2192 Cookies \u2192 https://www.bilibili.com\uFF0C\u590D\u5236 SESSDATA \u7684\u503C\uFF0C\u5728\u8BBE\u7F6E\u9875\u624B\u52A8\u7C98\u8D34" : "\u5F53\u524D\u73AF\u5883\u4E0D\u652F\u6301\u81EA\u52A8\u63D0\u53D6\u3002\u8BF7\u5728\u4E0A\u65B9\u7A97\u53E3\u5B8C\u6210\u767B\u5F55\uFF0C\u7136\u540E\u5173\u6389\u672C\u7A97\u53E3\u3001\u5728\u8BBE\u7F6E\u9875\u628A\u5B8C\u6574 Cookie\uFF08\u542B web_session\uFF09\u4E0E\u7528\u6237 ID \u624B\u52A8\u7C98\u8D34\u8FDB\u6765\uFF1B\u6216\u76F4\u63A5\u7528\u540C\u6B65\u7A97\u53E3\u626B\u7801\u767B\u5F55\uFF08\u767B\u5F55\u6001\u4F1A\u81EA\u52A8\u4FDD\u5B58\uFF09";
+        new Notice(`${p.name}\uFF1A${msg}`, 9e3);
+        return;
+      }
       const wc = this.webview.getWebContents();
       if (!wc) throw new Error("\u6D4F\u89C8\u5668\u7EC4\u4EF6\u5C1A\u672A\u5C31\u7EEA\uFF0C\u8BF7\u7A0D\u7B49\u4E24\u79D2\u518D\u8BD5");
       let value = "";
@@ -2996,7 +3017,7 @@ var ClipinPlugin = class extends Plugin {
     this.settingTab = new ClipinSettingTab(this.app, this);
     this.addSettingTab(this.settingTab);
     this.setupAutoSync();
-    console.log("[clipin] \u5DF2\u52A0\u8F7D\uFF0C\u652F\u6301\u5E73\u53F0\uFF1A" + PLATFORM_ORDER.join(", "));
+    console.log("[savault] \u5DF2\u52A0\u8F7D\uFF0C\u652F\u6301\u5E73\u53F0\uFF1A" + PLATFORM_ORDER.join(", "));
   }
   /* ---------- 落盘日志：渲染进程 console 不进 obsidian.log，报错写 sync.log 才能排查 ---------- */
   get logFilePath() {
@@ -3017,8 +3038,8 @@ var ClipinPlugin = class extends Plugin {
       const ts = (/* @__PURE__ */ new Date()).toLocaleString("zh-CN", { hour12: false });
       const line = `[${ts}] [${level}] ${msg}
 `;
-      if (level === "error") console.error("[clipin]", msg);
-      else console.log("[clipin]", msg);
+      if (level === "error") console.error("[savault]", msg);
+      else console.log("[savault]", msg);
       this._appendFileLog(line);
     } catch (_) {
     }
@@ -3049,8 +3070,7 @@ var ClipinPlugin = class extends Plugin {
         new Notice("\u6B63\u5728\u8BFB\u53D6\u4E13\u8F91\u5217\u8868\u2026\uFF08\u6D4F\u89C8\u5668\u7A97\u53E3\u81EA\u52A8\u6253\u5F00\uFF09", 4e3);
         let modal = null;
         const host = await this.openBrowser(p, cfg.auth && cfg.auth.cookie, {
-          autoStart: true,
-          title: `\u6B63\u5728\u8BFB\u53D6 ${p.name} \u4E13\u8F91\u5217\u8868`,
+          title: `\u6B63\u5728\u8BFB\u53D6 ${p.name} \u4E13\u8F91\u5217\u8868\uFF08\u767B\u5F55\u540E\u70B9\u300C\u5F00\u59CB\u8BFB\u53D6\u300D\uFF09`,
           onOpened: (m) => {
             modal = m;
           }
@@ -3195,8 +3215,14 @@ var ClipinPlugin = class extends Plugin {
     }
     this._syncing = true;
     try {
-      new Notice(`\u5F00\u59CB\u540C\u6B65 ${p.name}\u2026`);
+      new Notice(`\u5F00\u59CB\u540C\u6B65 ${p.name}\u2026\uFF08\u5982\u5F39\u51FA\u6D4F\u89C8\u5668\u7A97\u53E3\uFF0C\u767B\u5F55\u540E\u70B9\u300C\u5F00\u59CB\u8BFB\u53D6\u300D\uFF09`);
       const isPro = !!this.settings.licenseValid;
+      const needHost = platformId === "xiaohongshu" || platformId === "twitter";
+      const host = needHost ? await this.openBrowser(p, cfg.auth && cfg.auth.cookie) : void 0;
+      if (needHost && !host) {
+        new Notice("\u5DF2\u53D6\u6D88\u540C\u6B65\uFF08\u6D4F\u89C8\u5668\u7A97\u53E3\u5DF2\u5173\u95ED\uFF09");
+        return;
+      }
       const result = await core.sync({
         provider: p,
         target: this.buildTarget(),
@@ -3215,7 +3241,7 @@ var ClipinPlugin = class extends Plugin {
           dirTemplate: this.settings.target.obsidian.dirTemplate,
           linkAuthor: this.settings.target.obsidian.linkAuthor
         },
-        webviewHost: platformId === "xiaohongshu" || platformId === "twitter" ? await this.openBrowser(p, cfg.auth && cfg.auth.cookie) : void 0,
+        webviewHost: host,
         onProgress: (s) => {
           if (s && s.message) new Notice(s.message, 2e3);
         },
@@ -3524,20 +3550,21 @@ var BrowserModal = class extends Modal {
     contentEl.empty();
     contentEl.addClass("clipin-browser-modal");
     contentEl.createEl("h3", { text: this.opts.title || `\u6B63\u5728\u8BFB\u53D6 ${p.name} \u6536\u85CF` });
+    const hasCookie = !!(this.authCookie || "").trim();
     contentEl.createEl("p", {
-      text: this.authCookie ? "\u5DF2\u7528\u8BBE\u7F6E\u91CC\u7684 Cookie \u81EA\u52A8\u767B\u5F55\u3002\u786E\u8BA4\u9875\u9762\u662F\u767B\u5F55\u72B6\u6001\u540E\u70B9\u300C\u5F00\u59CB\u8BFB\u53D6\u300D\u3002" : "\u4FDD\u6301\u6B64\u7A97\u53E3\u6253\u5F00\uFF0C\u63D2\u4EF6\u4F1A\u81EA\u52A8\u6EDA\u52A8\u52A0\u8F7D\u3002\u5982\u672A\u767B\u5F55\u8BF7\u5148\u767B\u5F55\uFF0C\u767B\u5F55\u540E\u70B9\u300C\u5DF2\u767B\u5F55\uFF0C\u5F00\u59CB\u8BFB\u53D6\u300D\u3002",
+      text: this.opts.title ? "" : hasCookie ? "\u68C0\u6D4B\u5230\u8BBE\u7F6E\u91CC\u7684\u767B\u5F55\u4FE1\u606F\uFF0C\u4F1A\u81EA\u52A8\u5C1D\u8BD5\u514D\u767B\u5F55\u3002\u82E5\u7A97\u53E3\u4ECD\u662F\u767B\u5F55\u9875\uFF0C\u8BF7\u5728\u6B64\u767B\u5F55\u4E00\u6B21\uFF08\u53EA\u9700\u8FD9\u4E00\u6B21\uFF0C\u4E4B\u540E\u81EA\u52A8\u4FDD\u6301\uFF09\u3002\u786E\u8BA4\u767B\u5F55\u540E\u70B9\u300C\u5F00\u59CB\u8BFB\u53D6\u300D\u3002" : "\u6B64\u7A97\u53E3\u5C31\u662F\u6D4F\u89C8\u5668\uFF1A\u767B\u5F55\u4E00\u6B21\u540E\u70B9\u300C\u5F00\u59CB\u8BFB\u53D6\u300D\uFF1B\u767B\u5F55\u6001\u4F1A\u81EA\u52A8\u4FDD\u5B58\uFF0C\u4EE5\u540E\u4E0D\u7528\u518D\u767B\u3002",
       cls: "clipin-tip"
     });
-    this.webview = contentEl.createEl("webview");
-    this.webview.setAttribute("src", p.capabilities && p.capabilities.loginUrl || "about:blank");
-    this.webview.setAttribute("allowpopups", "");
-    this.webview.setAttribute("partition", `persist:clipin-${p.id}`);
-    this.webview.addClass("clipin-webview");
+    this.webview = makeWebviewEl(contentEl, `persist:clipin-${p.id}`, p.capabilities && p.capabilities.loginUrl || "about:blank", "clipin-webview");
     this.webview.addEventListener("dom-ready", async () => {
       if (this.cookiesInjected) return;
       this.cookiesInjected = true;
       const cookieStr = (this.authCookie || "").trim();
       if (cookieStr) {
+        if (!webviewCanAccessWebContents(this.webview)) {
+          this.plugin._log("info", `[webview] \u672C\u73AF\u5883\u4E0D\u652F\u6301\u81EA\u52A8\u6CE8\u5165 Cookie\uFF1B\u8BF7\u5728\u7A97\u53E3\u4E2D\u767B\u5F55\u4E00\u6B21\uFF08\u767B\u5F55\u6001\u6301\u4E45\u4FDD\u5B58\u5728 persist:clipin-${p.id}\uFF09`);
+          return;
+        }
         try {
           const ses = this.webview.getWebContents().session;
           const host = new URL(this.webview.getURL() || p.capabilities.loginUrl).hostname;
@@ -3558,11 +3585,8 @@ var BrowserModal = class extends Modal {
           this.plugin._log("info", `\u5DF2\u6CE8\u5165 ${pairs.length} \u6761 cookie \u5230 persist:clipin-${p.id}`);
           this.webview.reload();
         } catch (e) {
-          this.plugin._log("error", `cookie \u6CE8\u5165\u5931\u8D25\uFF0C\u9000\u56DE\u624B\u52A8\u767B\u5F55\uFF1A${e}`);
+          this.plugin._log("info", `\u81EA\u52A8\u6CE8\u5165 Cookie \u672A\u751F\u6548\uFF08${e.message}\uFF09\uFF0C\u8BF7\u5728\u7A97\u53E3\u4E2D\u767B\u5F55\u4E00\u6B21\u5373\u53EF`);
         }
-      }
-      if (this.opts.autoStart) {
-        setTimeout(() => this.startRead(), cookieStr ? 3e3 : 800);
       }
     });
     this.webview.addEventListener("render-process-gone", (e) => {
@@ -3570,7 +3594,7 @@ var BrowserModal = class extends Modal {
       new Notice("\u5185\u5D4C\u6D4F\u89C8\u5668\u5D29\u4E86\uFF08\u9875\u9762\u592A\u91CD\u6216\u5185\u5B58\u4E0D\u8DB3\uFF09\u3002\u5173\u6389\u672C\u7A97\u53E3\u91CD\u8BD5\u5373\u53EF\uFF0CObsidian \u672C\u4F53\u4E0D\u53D7\u5F71\u54CD\u3002", 8e3);
     });
     const row = contentEl.createDiv({ cls: "clipin-btn-row" });
-    this.goBtn = row.createEl("button", { text: this.authCookie ? "\u5F00\u59CB\u8BFB\u53D6" : "\u5DF2\u767B\u5F55\uFF0C\u5F00\u59CB\u8BFB\u53D6" });
+    this.goBtn = row.createEl("button", { text: "\u5DF2\u767B\u5F55\uFF0C\u5F00\u59CB\u8BFB\u53D6" });
     this.goBtn.addClass("mod-cta");
     this.goBtn.onclick = () => this.startRead();
     const close = row.createEl("button", { text: "\u5173\u95ED" });
@@ -3763,13 +3787,18 @@ var ClipinSettingTab = class extends PluginSettingTab {
         }
         if (p.capabilities && p.capabilities.collections) {
           const sel = cfg.collections || [];
-          new Setting(containerEl).setName("\u3000\u540C\u6B65\u8303\u56F4").setDesc(sel.length ? "\u53EA\u540C\u6B65\uFF1A" + sel.join("\u3001") : "\u5168\u90E8\u6536\u85CF\uFF08\u70B9\u53F3\u8FB9\u6309\u94AE\u6311\u4E13\u8F91\uFF09").addButton((b) => b.setButtonText(sel.length ? "\u91CD\u65B0\u9009\u62E9" : "\u9009\u62E9\u4E13\u8F91").onClick(async () => {
+          new Setting(containerEl).setName("\u3000\u540C\u6B65\u8303\u56F4").setDesc(sel.length ? "\u53EA\u540C\u6B65\uFF1A" + sel.join("\u3001") : "\u5168\u90E8\u6536\u85CF\uFF08\u70B9\u300C\u9009\u62E9\u4E13\u8F91\u300D\u6311\uFF0C\u4E00\u4E2A\u4E0D\u52FE = \u5168\u90E8\uFF09").addButton((b) => b.setButtonText(sel.length ? "\u91CD\u65B0\u9009\u62E9" : "\u9009\u62E9\u4E13\u8F91").onClick(async () => {
             b.setButtonText("\u8BFB\u53D6\u4E2D\u2026").setDisabled(true);
             try {
               await plugin.promptChooseCollections(id);
             } finally {
               b.setButtonText((plugin.settings.platforms[id].collections || []).length ? "\u91CD\u65B0\u9009\u62E9" : "\u9009\u62E9\u4E13\u8F91").setDisabled(false);
             }
+          })).addButton((b) => b.setButtonText("\u6E05\u7A7A\u8303\u56F4").setWarning().setDisabled(!sel.length).onClick(async () => {
+            cfg.collections = [];
+            await plugin.saveSettings();
+            this.display();
+            new Notice("\u5DF2\u6E05\u7A7A\u8303\u56F4\uFF1A\u5C06\u540C\u6B65\u5168\u90E8\u6536\u85CF");
           }));
         }
         new Setting(containerEl).setName("\u3000\u7ACB\u5373\u540C\u6B65").setDesc(`\u628A ${p.name} \u7684\u6536\u85CF\u540C\u6B65\u5230${s.target.type === "notion" ? " Notion" : " Obsidian"}`).addButton((b) => b.setButtonText("\u540C\u6B65").onClick(async () => {
