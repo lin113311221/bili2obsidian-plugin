@@ -5226,12 +5226,11 @@ function safeUrl(wv) {
     return "";
   }
 }
-function anchorBottomLeft(modal, wide) {
+function setModalSize(modal, wide) {
   try {
-    const el = modal.containerEl;
-    if (!el || typeof el.addClass !== "function") return;
-    el.addClass("clipin-anchor-bl");
-    if (wide) el.addClass("clipin-modal-wide");
+    if (!modal || !modal.modalEl || typeof modal.modalEl.addClass !== "function") return;
+    if (wide) modal.modalEl.addClass("clipin-modal-wide");
+    else modal.modalEl.addClass("clipin-modal-snap");
   } catch (_) {
   }
 }
@@ -5252,7 +5251,7 @@ var LoginModal = class extends Modal {
     const { contentEl } = this;
     const p = this.provider;
     contentEl.empty();
-    anchorBottomLeft(this, true);
+    setModalSize(this, true);
     contentEl.addClass("clipin-login-modal");
     contentEl.createEl("h3", { text: `\u767B\u5F55 ${p.name}` });
     contentEl.createEl("p", {
@@ -5404,7 +5403,8 @@ var QrLoginModal = class extends Modal {
   onOpen() {
     const { contentEl } = this;
     contentEl.empty();
-    anchorBottomLeft(this, false);
+    setModalSize(this, false);
+    contentEl.addClass("clipin-qr-modal");
     contentEl.addClass("clipin-qr-modal");
     contentEl.createEl("h3", { text: `${this.provider.name} \xB7 \u626B\u7801\u767B\u5F55` });
     this.qrEl = contentEl.createDiv({ cls: "clipin-qr-box" });
@@ -6338,7 +6338,7 @@ var BrowserModal = class extends Modal {
     const { contentEl } = this;
     const p = this.provider;
     contentEl.empty();
-    anchorBottomLeft(this, true);
+    setModalSize(this, true);
     contentEl.addClass("clipin-browser-modal");
     contentEl.createEl("h3", { text: this.opts.title || `\u6B63\u5728\u8BFB\u53D6 ${p.name} \u6536\u85CF` });
     const hasCookie = !!(this.authCookie || "").trim();
@@ -6421,7 +6421,7 @@ var CollectionPickerModal = class extends Modal {
   onOpen() {
     const { contentEl } = this;
     contentEl.empty();
-    anchorBottomLeft(this, false);
+    setModalSize(this, false);
     contentEl.createEl("h3", { text: "\u9009\u62E9\u8981\u540C\u6B65\u7684\u4E13\u8F91 / \u6536\u85CF\u5939" });
     contentEl.createEl("p", { text: "\u4E00\u4E2A\u90FD\u4E0D\u52FE = \u540C\u6B65\u5168\u90E8\u6536\u85CF\u3002", cls: "clipin-tip" });
     const list = contentEl.createDiv({ cls: "clipin-picker-list" });

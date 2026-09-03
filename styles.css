@@ -1,40 +1,25 @@
 /* 知识桥梁 Savault 插件样式 */
 
-/* ── 弹窗定位：锚在左下角，尺寸相对「Obsidian 窗口」而不是视口 ──────────────
-
-   为什么放弃 Obsidian 默认的居中：
-   1) Obsidian 的 .modal 限高用的是 `--dialog-max-height: 85vh`，**vh 是视口单位**；
-      而弹窗容器 .modal-container（top:0;bottom:0）铺满的是 **Obsidian 窗口**。
-      窗口没最大化时 85vh 会远高于窗口高度 → 弹窗底部（按钮行）被推出窗口外，
-      看不见也点不到。内嵌浏览器这种高内容弹窗必踩。
-   2) 居中弹窗的左上角位置随内容高度浮动，内容一变眼睛就得重新找。
-      左下角锚定后左上角**固定**，内容只朝右下扩展，位置永远可预期。
-
-   尺寸一律用百分比（相对 .modal-container = 窗口），不再用 vw/vh。 */
-.modal-container.clipin-anchor-bl {
-  align-items: flex-end;
-  justify-content: flex-start;
-}
-/* 宽度不写死：沿用 Obsidian 的 --dialog-width（560px），用户换主题/改设置时跟着变；
-   只有内嵌浏览器那类弹窗才在下面单独加宽。
-   用 margin 而不是给容器加 padding：.modal-bg 是 position:absolute 铺满的，
-   给容器加 padding 会让遮罩跟着缩水、四周漏光。 */
-.modal-container.clipin-anchor-bl > .modal {
-  margin: 24px;
-  max-width: calc(100% - 48px);
-  max-height: calc(100% - 48px);
+/* ── 弹窗尺寸：限高用「窗口高度 - 边距」，取代默认 85vh（vh 是视口单位，
+   窗口未最大化时会把按钮行推出窗口外，看不见也点不到）。弹窗本身保持 Obsidian 默认居中。 ── */
+/* 内嵌浏览器要更宽：登录二维码得够大才扫得上 */
+.modal.clipin-modal-wide {
+  width: min(880px, calc(100% - 32px));
+  max-height: calc(100% - 32px);
   box-sizing: border-box;
 }
-/* 内嵌浏览器要更宽：登录二维码得够大才扫得上 */
-.modal-container.clipin-anchor-bl.clipin-modal-wide > .modal {
-  width: min(880px, calc(100% - 48px));
+/* 普通弹窗只限高，不加宽 */
+.modal.clipin-modal-snap {
+  max-height: calc(100% - 32px);
+  box-sizing: border-box;
 }
 
 /* flex 链打通：.modal 是 column flex，.modal-content 是它的子项。
    flex 子项默认 min-height:auto（不会收缩到内容高度以下），
    不显式写 min-height:0 的话，webview 的 min-height 会反过来把弹窗撑破 max-height，
    按钮行又被顶出去了 —— 等于没改。 */
-.modal-container.clipin-anchor-bl > .modal > .modal-content {
+.modal.clipin-modal-wide > .modal-content,
+.modal.clipin-modal-snap > .modal-content {
   display: flex;
   flex-direction: column;
   flex: 1 1 auto;
@@ -76,9 +61,9 @@
   position: relative;
   overflow: hidden;
   width: 100%;
-  /* 240 而不是更大：弹窗高度已被限制为「窗口高度 - 48px」，
-     这里再贪心就会把下面按钮行顶出可视区，等于白限高。 */
-  min-height: 240px;
+  /* v0.5.23：从 240 提到 360 —— 二维码区大约需要 360~400px 才不会被裁。
+     上限由外层 max-height: calc(100% - 32px) 控制，不会顶破弹窗。 */
+  min-height: 360px;
   border: 1px solid var(--background-modifier-border);
   border-radius: 8px;
   background: var(--background-secondary);
@@ -117,15 +102,17 @@
   margin-top: 0;
 }
 
-/* 弹窗底部按钮行：水平居中，避免被推到视口右边缘外；
+/* 弹窗底部按钮行（v0.5.23）：**左下角对齐**。
+   用户原话：「左下角」是说按钮在弹窗内的左下角，**不是**把弹窗锚到屏幕左下角。
+   Obsidian 默认是右对齐，但右边贴边容易有视觉负担 + 用户多次表示要左侧。
    flex:0 保证不被 webview 挤掉，padding 给按钮左右安全间距 */
 .clipin-btn-row {
   display: flex;
-  justify-content: center;       /* 居中：永远不贴边，绝对不会被裁 */
+  justify-content: flex-start;
   align-items: center;
   gap: 12px;
   margin-top: 14px;
-  padding: 4px 8px 0;
+  padding: 4px 0 0;
   flex: 0 0 auto;
 }
 .clipin-btn-row button {
