@@ -163,15 +163,23 @@ var require_http = __commonJS({
       const conf = cfg || {};
       const request = conf.request || nodeFetch;
       const intervalMs = conf.intervalMs == null ? 300 : conf.intervalMs;
+      const jitterMax = conf.jitterMax == null ? 0 : conf.jitterMax;
+      const fastHosts = Array.isArray(conf.fastHosts) ? conf.fastHosts.filter(Boolean) : [];
       const maxRetries = conf.maxRetries == null ? 3 : conf.maxRetries;
       const onThrottle = conf.onThrottle || (() => {
       });
       const log = conf.logger || (() => {
       });
       let lastRequestAt = 0;
+      function isFast(url) {
+        if (!fastHosts.length || !url) return false;
+        const u = String(url);
+        return fastHosts.some((h) => u.includes(h));
+      }
       async function throttle() {
         if (intervalMs <= 0) return;
-        const wait = lastRequestAt + intervalMs - Date.now();
+        const extra = jitterMax > 0 ? Math.floor(Math.random() * (jitterMax + 1)) : 0;
+        const wait = lastRequestAt + intervalMs + extra - Date.now();
         if (wait > 0) {
           onThrottle(wait);
           await sleep(wait);
@@ -179,7 +187,7 @@ var require_http = __commonJS({
         lastRequestAt = Date.now();
       }
       async function fetchOnce(url, opts) {
-        await throttle();
+        if (!(opts && opts.noThrottle) && !isFast(url)) await throttle();
         const o = opts || {};
         const res = await request(url, {
           method: o.method || "GET",
@@ -246,7 +254,7 @@ var require_http = __commonJS({
         resetThrottle: () => {
           lastRequestAt = 0;
         },
-        _config: { intervalMs, maxRetries }
+        _config: { intervalMs, jitterMax, fastHosts: fastHosts.length, maxRetries }
       };
     }
     module2.exports = { createHttp, normalizeResponse, nodeFetch, sleep };
@@ -1119,6 +1127,9 @@ var require_bilibili = __commonJS({
 var require_xiaohongshu = __commonJS({
   "core/providers/xiaohongshu.js"(exports2, module2) {
     var { makeItem, toISO } = require_model();
+    function jitter(base, spread) {
+      return base + Math.floor(Math.random() * (spread + 1));
+    }
     var WEB = "https://www.xiaohongshu.com";
     var COLLECT_API_PATTERN = "/api/sns/web/v2/note/collect/page";
     function parseCount(v) {
@@ -1207,9 +1218,9 @@ var require_xiaohongshu = __commonJS({
         await webviewHost.clearCaptured();
         await webviewHost.reinject("/api/sns/web/");
         await webviewHost.clickByText({ selector: '.reds-tab, .feeds-tab, [class*="tab-item"]', text: "\u6536\u85CF" });
-        await webviewHost.sleep(2500);
+        await webviewHost.sleep(jitter(2300, 1200));
         await webviewHost.scrollToBottom();
-        await webviewHost.sleep(1500);
+        await webviewHost.sleep(jitter(1200, 900));
         const captured = await webviewHost.getCaptured();
         const albums = extractAlbums(captured);
         log(`[xhs] \u55C5\u63A2\u5230 ${albums.length} \u4E2A\u4E13\u8F91\uFF08\u6765\u81EA ${captured.length} \u4E2A\u54CD\u5E94\uFF09`);
@@ -1246,7 +1257,7 @@ var require_xiaohongshu = __commonJS({
               throw new Error("\u6CA1\u627E\u5230\u300C\u6536\u85CF\u300D\u6807\u7B7E\u2014\u2014\u53EF\u80FD\u767B\u5F55\u6001\u5DF2\u5931\u6548\u6216\u9875\u9762\u6539\u7248\u3002\u8BF7\u91CD\u65B0\u767B\u5F55\u540E\u91CD\u8BD5");
             }
             if (albumTitle) {
-              await webviewHost.sleep(2e3);
+              await webviewHost.sleep(jitter(2e3, 1e3));
               await webviewHost.clearCaptured();
               await webviewHost.sleep(300);
               const clicked = await webviewHost.clickByText({
@@ -1254,15 +1265,17 @@ var require_xiaohongshu = __commonJS({
                 text: albumTitle
               });
               if (!clicked) throw new Error(`\u6CA1\u627E\u5230\u4E13\u8F91\u300C${albumTitle}\u300D\uFF08\u5148\u5728\u8BBE\u7F6E\u91CC\u62C9\u4E00\u6B21\u4E13\u8F91\u5217\u8868\u6838\u5BF9\u540D\u5B57\uFF09`);
-              await webviewHost.sleep(2500);
+              await webviewHost.sleep(jitter(2300, 1200));
             }
           },
-          // 4) 滚动加载，直到没有新数据或到达上限
+          // 4) 滚动加载，直到没有新数据或到达上限。
+          //    滚动节奏 1.1~2.2s 随机：小红书对「固定节奏高频滚动」敏感（实测 5s 内 7 连发
+          //    即触发 461 限流），快慢不一更像真人浏览，风控判定窗口更稳。
           async drive() {
             const scrolls = maxScrolls || 60;
             for (let i = 0; i < scrolls; i++) {
               await webviewHost.scrollToBottom();
-              await webviewHost.sleep(1200);
+              await webviewHost.sleep(jitter(1100, 1100));
               const idle = await webviewHost.isIdleSince(8e3);
               if (idle) break;
             }
@@ -2923,7 +2936,7 @@ var LoginModal = class extends Modal {
         setTimeout(() => this.plugin.promptChooseCollections(p.id), 500);
       }
     } catch (e) {
-      console.error("[clipin] \u63D0\u53D6\u767B\u5F55\u6001\u5931\u8D25", e);
+      this.plugin._log("error", `\u63D0\u53D6\u767B\u5F55\u6001\u5931\u8D25\uFF1A${e && e.stack || e}`);
       new Notice("\u63D0\u53D6\u5931\u8D25\uFF1A" + e.message);
     }
   }
@@ -2935,7 +2948,37 @@ var ClipinPlugin = class extends Plugin {
   async onload() {
     await this.migrateLegacySettings();
     await this.loadSettings();
-    this.http = core.createHttp({ request: makeRequest(), intervalMs: 300 });
+    this.http = core.createHttp({
+      request: makeRequest(),
+      // 限速（2026-09-03 用户要求，防风控）：
+      //  平台 API 请求间隔 1.5~2.5s 随机。依据：B站收藏导出工具 bilibili-favorites-exporter
+      //  默认翻页间隔 2s（0.1~10s 可调）；社区对 B站建议同目标 ≥2~3s + 随机抖动；
+      //  小红书直连接口实测 5s 内 7 连发即触发 461 限流——所以小红书本体取数全走
+      //  webview（平台前端自己签名发请求，速度受 webview 滚动节奏控制，见 xiaohongshu.js），
+      //  这里主要兜底 B站等直连场景。固定间隔会被风控按模式识别，故加 jitterMax 随机化。
+      intervalMs: 1500,
+      // 最小间隔
+      jitterMax: 1e3,
+      // +0~1s 随机
+      maxRetries: 3,
+      // 快车道：图床 CDN / 用户自己的 AI 网关不是平台风控对象，不排队不占节流计时
+      fastHosts: [
+        ".xhscdn.com",
+        // 小红书图床 / 视频 CDN
+        ".hdslb.com",
+        // B站图床 / 字幕静态文件
+        "aliyuncs.com",
+        // dashscope ASR（BYOK）
+        "minimaxi.com",
+        "api.openai.com",
+        "anthropic.com",
+        "moonshot.cn",
+        "deepseek.com"
+        // BYOK AI 网关
+      ],
+      logger: (m) => this._log("http", m)
+    });
+    this._trimLogFile();
     this.addRibbonIcon("scissors", "\u77E5\u8BC6\u6865\u6881\uFF1A\u7ACB\u5373\u540C\u6B65\u6536\u85CF", () => this.syncAll());
     this.registerView(CHAT_VIEW_TYPE, (leaf) => new ChatView(leaf, this));
     this.addRibbonIcon("message-circle", "\u77E5\u8BC6\u6865\u6881\uFF1A\u95EE\u6536\u85CF\uFF08AI \u5BF9\u8BDD\uFF09", () => this.openChatView());
@@ -2954,6 +2997,40 @@ var ClipinPlugin = class extends Plugin {
     this.addSettingTab(this.settingTab);
     this.setupAutoSync();
     console.log("[clipin] \u5DF2\u52A0\u8F7D\uFF0C\u652F\u6301\u5E73\u53F0\uFF1A" + PLATFORM_ORDER.join(", "));
+  }
+  /* ---------- 落盘日志：渲染进程 console 不进 obsidian.log，报错写 sync.log 才能排查 ---------- */
+  get logFilePath() {
+    const cfgDir = this.app.vault && this.app.vault.configDir || ".obsidian";
+    return `${cfgDir}/plugins/savault/sync.log`;
+  }
+  async _appendFileLog(text) {
+    try {
+      const a = this.app.vault.adapter;
+      if (!a || typeof a.append !== "function") return;
+      await a.append(this.logFilePath, text);
+    } catch (_) {
+    }
+  }
+  /** 同时打 console 与 sync.log */
+  _log(level, msg) {
+    try {
+      const ts = (/* @__PURE__ */ new Date()).toLocaleString("zh-CN", { hour12: false });
+      const line = `[${ts}] [${level}] ${msg}
+`;
+      if (level === "error") console.error("[clipin]", msg);
+      else console.log("[clipin]", msg);
+      this._appendFileLog(line);
+    } catch (_) {
+    }
+  }
+  async _trimLogFile() {
+    try {
+      const a = this.app.vault.adapter;
+      if (!a || typeof a.stat !== "function" || typeof a.write !== "function") return;
+      const s = await a.stat(this.logFilePath);
+      if (s && s.size > 512 * 1024) await a.write(this.logFilePath, "[sync.log \u8D85 512KB\uFF0C\u5DF2\u4ECE\u672C\u8F6E\u91CD\u65B0\u8BB0\u5F55]\n");
+    } catch (_) {
+    }
   }
   /**
    * 登录成功后的专辑引导：读一次专辑列表 → 弹勾选窗。
@@ -2980,7 +3057,7 @@ var ClipinPlugin = class extends Plugin {
         });
         if (!host) return;
         try {
-          list = await p.listCollections({ auth: cfg.auth, http: this.http, webviewHost: host, logger: (m) => console.log("[clipin] " + m) });
+          list = await p.listCollections({ auth: cfg.auth, http: this.http, webviewHost: host, logger: (m) => this._log("info", m) });
         } finally {
           if (modal) modal.close();
         }
@@ -2998,7 +3075,7 @@ var ClipinPlugin = class extends Plugin {
         new Notice(chosen.length ? `\u5DF2\u8BBE\u4E3A\u53EA\u540C\u6B65\uFF1A${chosen.join("\u3001")}` : "\u5DF2\u8BBE\u4E3A\u540C\u6B65\u5168\u90E8\u6536\u85CF");
       }).open();
     } catch (e) {
-      console.error("[clipin] \u8BFB\u53D6\u4E13\u8F91\u5931\u8D25", e);
+      this._log("error", `\u8BFB\u53D6\u4E13\u8F91\u5931\u8D25\uFF1A${e && e.stack || e}`);
       new Notice("\u8BFB\u53D6\u4E13\u8F91\u5931\u8D25\uFF1A" + e.message);
     }
   }
@@ -3142,26 +3219,28 @@ var ClipinPlugin = class extends Plugin {
         onProgress: (s) => {
           if (s && s.message) new Notice(s.message, 2e3);
         },
-        logger: (m) => console.log("[clipin] " + m),
+        logger: (m) => this._log("info", m),
         // 小宇宙 refresh_token 每次同步都会轮换，必须回写，否则第二次同步必然失败
         onTokenRefresh: async ({ refreshToken }) => {
           if (!refreshToken) return;
           this.settings.platforms[platformId].auth.refreshToken = refreshToken;
           await this.saveSettings();
-          console.log("[clipin] \u5DF2\u56DE\u5199\u8F6E\u6362\u540E\u7684 refresh_token");
+          this._log("info", "\u5DF2\u56DE\u5199\u8F6E\u6362\u540E\u7684 refresh_token");
         }
       });
+      this._log("info", `[${p.name}] \u540C\u6B65\u7ED3\u675F created=${result.created} skipped=${result.skipped} failed=${result.failed} quotaHit=${result.quotaHit} aborted=${result.aborted}`);
+      for (const err of result.errors || []) this._log("error", `[${p.name}] ${err}`);
       this.settings.syncedCount = (this.settings.syncedCount || 0) + Math.max(0, result.created);
       await this.saveSettings();
       if (result.quotaHit) {
         new Notice(`\u514D\u8D39\u7248 ${FREE_QUOTA} \u6761\u989D\u5EA6\u5DF2\u7528\u5B8C\u3002\u5347\u7EA7\u6C38\u4E45\u7248\u53EF\u65E0\u9650\u540C\u6B65\uFF08\u8BBE\u7F6E\u9875 \u2192 \u6388\u6743\uFF09`);
       } else if (result.errors.length) {
-        new Notice(`${p.name}\uFF1A\u65B0\u589E ${result.created} \u6761\uFF0C${result.errors.length} \u6761\u51FA\u9519\uFF08\u8BE6\u89C1\u63A7\u5236\u53F0\uFF09`);
+        new Notice(`${p.name}\uFF1A\u65B0\u589E ${result.created} \u6761\uFF0C${result.errors.length} \u6761\u51FA\u9519\uFF08\u8BE6\u60C5\u89C1\u63D2\u4EF6\u76EE\u5F55 sync.log\uFF09`);
       } else {
         new Notice(`${p.name} \u540C\u6B65\u5B8C\u6210\uFF1A\u65B0\u589E ${result.created} \u6761\uFF0C\u8DF3\u8FC7 ${result.skipped} \u6761`);
       }
     } catch (e) {
-      console.error("[clipin] \u540C\u6B65\u5931\u8D25", e);
+      this._log("error", `[${p.name}] \u540C\u6B65\u5F02\u5E38\uFF1A${e && e.stack || e}`);
       new Notice("\u540C\u6B65\u5931\u8D25\uFF1A" + e.message);
     } finally {
       this._syncing = false;
@@ -3183,7 +3262,7 @@ var ClipinPlugin = class extends Plugin {
    */
   openBrowser(provider, authCookie, opts) {
     return new Promise((resolve) => {
-      const modal = new BrowserModal(this.app, provider, resolve, authCookie, opts);
+      const modal = new BrowserModal(this.app, this, provider, resolve, authCookie, opts);
       modal.open();
       if (opts && typeof opts.onOpened === "function") opts.onOpened(modal);
     });
@@ -3429,8 +3508,9 @@ function injectChatStyle() {
   document.head.appendChild(el);
 }
 var BrowserModal = class extends Modal {
-  constructor(app, provider, resolveHost, authCookie, opts) {
+  constructor(app, plugin, provider, resolveHost, authCookie, opts) {
     super(app);
+    this.plugin = plugin;
     this.provider = provider;
     this.resolveHost = resolveHost;
     this.authCookie = authCookie || "";
@@ -3475,10 +3555,10 @@ var BrowserModal = class extends Modal {
               value
             });
           }
-          console.log(`[savault] \u5DF2\u6CE8\u5165 ${pairs.length} \u6761 cookie \u5230 persist:clipin-${p.id}`);
+          this.plugin._log("info", `\u5DF2\u6CE8\u5165 ${pairs.length} \u6761 cookie \u5230 persist:clipin-${p.id}`);
           this.webview.reload();
         } catch (e) {
-          console.warn("[savault] cookie \u6CE8\u5165\u5931\u8D25\uFF0C\u9000\u56DE\u624B\u52A8\u767B\u5F55\uFF1A", e);
+          this.plugin._log("error", `cookie \u6CE8\u5165\u5931\u8D25\uFF0C\u9000\u56DE\u624B\u52A8\u767B\u5F55\uFF1A${e}`);
         }
       }
       if (this.opts.autoStart) {
@@ -3486,7 +3566,7 @@ var BrowserModal = class extends Modal {
       }
     });
     this.webview.addEventListener("render-process-gone", (e) => {
-      console.error("[savault] webview \u5D29\u6E83\uFF1A", e && e.details);
+      this.plugin._log("error", `webview \u5D29\u6E83\uFF1A${e && e.details && e.details.reason || e && e.details || ""}`);
       new Notice("\u5185\u5D4C\u6D4F\u89C8\u5668\u5D29\u4E86\uFF08\u9875\u9762\u592A\u91CD\u6216\u5185\u5B58\u4E0D\u8DB3\uFF09\u3002\u5173\u6389\u672C\u7A97\u53E3\u91CD\u8BD5\u5373\u53EF\uFF0CObsidian \u672C\u4F53\u4E0D\u53D7\u5F71\u54CD\u3002", 8e3);
     });
     const row = contentEl.createDiv({ cls: "clipin-btn-row" });
@@ -3505,7 +3585,7 @@ var BrowserModal = class extends Modal {
     }
     this.resolveHost(createWebviewHost({
       webview: this.webview,
-      onStatus: (s) => console.log("[clipin][webview] " + s)
+      onStatus: (s) => this.plugin._log("info", `[webview] ${s}`)
     }));
   }
   onClose() {
