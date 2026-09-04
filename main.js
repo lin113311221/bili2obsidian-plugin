@@ -1571,7 +1571,7 @@ var require_xiaohongshu = __commonJS({
             const scrolls = maxScrolls || 60;
             for (let i = 0; i < scrolls; i++) {
               await webviewHost.scrollToBottom();
-              await webviewHost.sleep(jitter(1100, 1100));
+              await webviewHost.sleep(jitter(2500, 1500));
               const idle = await webviewHost.isIdleSince(8e3);
               if (idle) break;
             }
@@ -1605,13 +1605,13 @@ var require_xiaohongshu = __commonJS({
             a.click(); return true;
           })()`);
               if (!clicked) continue;
-              await webviewHost.sleep(jitter(600, 300));
+              await webviewHost.sleep(jitter(1500, 800));
               await webviewHost.eval(`(function(){
             var vs = document.querySelectorAll('video');
             for (var i = 0; i < vs.length; i++) { vs[i].autoplay = false; try { vs[i].pause(); } catch(e){} }
             return vs.length;
           })()`);
-              const deadline = Date.now() + 6e3;
+              const deadline = Date.now() + 8e3;
               let got = false;
               while (Date.now() < deadline) {
                 const c = await webviewHost.getCaptured();
@@ -1628,7 +1628,7 @@ var require_xiaohongshu = __commonJS({
             document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
             return true;
           })()`);
-              await webviewHost.sleep(jitter(400, 200));
+              await webviewHost.sleep(jitter(1200, 600));
             } catch (_) {
             }
           }
@@ -5846,10 +5846,10 @@ var ClipinPlugin = class extends Plugin {
       //  小红书直连接口实测 5s 内 7 连发即触发 461 限流——所以小红书本体取数全走
       //  webview（平台前端自己签名发请求，速度受 webview 滚动节奏控制，见 xiaohongshu.js），
       //  这里主要兜底 B站等直连场景。固定间隔会被风控按模式识别，故加 jitterMax 随机化。
-      intervalMs: 1500,
-      // 最小间隔
-      jitterMax: 1e3,
-      // +0~1s 随机
+      intervalMs: 2500,
+      // v0.5.37：拉长到 2.5s（之前 1.5s 太频繁触发风控）
+      jitterMax: 1500,
+      // +0~1.5s 随机
       maxRetries: 3,
       // 快车道：图床 CDN / 用户自己的 AI 网关不是平台风控对象，不排队不占节流计时
       fastHosts: [
@@ -6405,6 +6405,15 @@ var ClipinPlugin = class extends Plugin {
       new Notice("\u4E0A\u4E00\u6B21\u540C\u6B65\u5C1A\u672A\u5B8C\u6210\uFF0C\u8BF7\u7A0D\u5019");
       return;
     }
+    const lastSyncKey = `_lastSyncAt_${platformId}`;
+    const lastAt = Number(this.settings[lastSyncKey]) || 0;
+    const minGapMs = 10 * 60 * 1e3;
+    if (lastAt && Date.now() - lastAt < minGapMs) {
+      const waitMin = Math.ceil((minGapMs - (Date.now() - lastAt)) / 6e4);
+      new Notice(`${p.name} \u521A\u540C\u6B65\u8FC7\uFF0C\u8BF7 ${waitMin} \u5206\u949F\u540E\u518D\u8BD5\uFF08\u9891\u7E41\u540C\u6B65\u4F1A\u89E6\u53D1\u5E73\u53F0\u98CE\u63A7\uFF09`);
+      this._log("info", `[${p.name}] \u9891\u7387\u9650\u5236\uFF1A\u8DDD\u4E0A\u6B21\u540C\u6B65\u4E0D\u8DB3 10 \u5206\u949F\uFF0C\u8DF3\u8FC7`);
+      return;
+    }
     this._syncing = true;
     this._log("info", `\u5F00\u59CB\u540C\u6B65 ${p.name}\uFF08${platformId}\uFF09`);
     try {
@@ -6490,6 +6499,7 @@ var ClipinPlugin = class extends Plugin {
       if (this.settings.fetchComments && p.id === "xiaohongshu") {
       }
       this.settings.syncedCount = (this.settings.syncedCount || 0) + Math.max(0, result.created);
+      this.settings[`_lastSyncAt_${platformId}`] = Date.now();
       await this.saveSettings();
       if (result.quotaHit) {
         new Notice(`\u514D\u8D39\u7248 ${FREE_QUOTA} \u6761\u989D\u5EA6\u5DF2\u7528\u5B8C\u3002\u5347\u7EA7\u6C38\u4E45\u7248\u53EF\u65E0\u9650\u540C\u6B65\uFF08\u8BBE\u7F6E\u9875 \u2192 \u6388\u6743\uFF09`);
