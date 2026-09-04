@@ -6407,11 +6407,11 @@ var ClipinPlugin = class extends Plugin {
     }
     const lastSyncKey = `_lastSyncAt_${platformId}`;
     const lastAt = Number(this.settings[lastSyncKey]) || 0;
-    const minGapMs = 60 * 60 * 1e3;
+    const minGapMs = 30 * 60 * 1e3;
     if (lastAt && Date.now() - lastAt < minGapMs) {
       const waitMin = Math.ceil((minGapMs - (Date.now() - lastAt)) / 6e4);
       new Notice(`${p.name} \u521A\u540C\u6B65\u8FC7\uFF0C\u8BF7 ${waitMin} \u5206\u949F\u540E\u518D\u8BD5\uFF08\u9891\u7E41\u540C\u6B65\u4F1A\u89E6\u53D1\u5E73\u53F0\u98CE\u63A7\uFF09`);
-      this._log("info", `[${p.name}] \u9891\u7387\u9650\u5236\uFF1A\u8DDD\u4E0A\u6B21\u540C\u6B65\u4E0D\u8DB3 1 \u5C0F\u65F6\uFF0C\u8DF3\u8FC7`);
+      this._log("info", `[${p.name}] \u9891\u7387\u9650\u5236\uFF1A\u8DDD\u4E0A\u6B21\u540C\u6B65\u4E0D\u8DB3 30 \u5206\u949F\uFF0C\u8DF3\u8FC7`);
       return;
     }
     this._syncing = true;
