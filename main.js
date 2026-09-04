@@ -5459,43 +5459,6 @@ async function readPartitionCookies(partitionId, url) {
   return null;
 }
 function attachWebviewGuards(wv, plugin, tag) {
-  if (!wv || !plugin) return;
-  const log = (m) => plugin._log("info", `[${tag}] ${m}`);
-  wv.addEventListener("dom-ready", () => log(`dom-ready url=${safeUrl(wv)}`));
-  wv.addEventListener("did-start-loading", () => log("did-start-loading"));
-  wv.addEventListener("did-finish-load", () => log("did-finish-load"));
-  wv.addEventListener("new-window", (e) => log(`new-window \u2192 ${e && e.url || ""}`));
-  wv.addEventListener("will-navigate", (e) => log(`will-navigate \u2192 ${e && e.url || ""}`));
-  wv.addEventListener("unresponsive", () => plugin._log("error", `[${tag}] webview \u65E0\u54CD\u5E94`));
-  wv.addEventListener("responsive", () => log("webview \u6062\u590D\u54CD\u5E94"));
-  let beats = 0;
-  const beat = () => {
-    if (!wv.isConnected) return;
-    beats += 1;
-    let mem = "";
-    try {
-      const m = typeof process !== "undefined" && process.memoryUsage ? process.memoryUsage() : null;
-      if (m) mem = ` rss=${Math.round((m.rss || 0) / 1048576)}MB heap=${Math.round((m.heapUsed || 0) / 1048576)}MB`;
-    } catch (_) {
-    }
-    log(`\u5B58\u6D3B ${beats}s${mem}`);
-    if (beats < 30) setTimeout(beat, 1e3);
-  };
-  wv.addEventListener("did-stop-loading", () => {
-    log("did-stop-loading");
-    setTimeout(beat, 1e3);
-  });
-  wv.addEventListener("render-process-gone", (e) => {
-    plugin._log("error", `[${tag}] webview \u6E32\u67D3\u8FDB\u7A0B\u5D29\u6E83\uFF1A${e && e.details && e.details.reason || e && e.details || ""}`);
-    new Notice("\u5185\u5D4C\u6D4F\u89C8\u5668\u5D29\u4E86\uFF08\u9875\u9762\u592A\u91CD\u6216\u5185\u5B58\u4E0D\u8DB3\uFF09\u3002\u5173\u6389\u672C\u7A97\u53E3\u91CD\u8BD5\u5373\u53EF\uFF0CObsidian \u672C\u4F53\u4E0D\u53D7\u5F71\u54CD\u3002", 8e3);
-  });
-}
-function safeUrl(wv) {
-  try {
-    return wv.getURL() || "";
-  } catch (_) {
-    return "";
-  }
 }
 function setModalSize(modal, wide) {
   try {
@@ -6240,34 +6203,42 @@ var ClipinPlugin = class extends Plugin {
    */
   _chooseSyncMode(reason) {
     return new Promise((resolve) => {
-      const { SuggestModal } = require("obsidian");
       const hint = reason ? `\uFF08${reason}\uFF09` : "";
-      const opts = [
-        { id: "new", text: "\u4EC5\u540C\u6B65\u65B0\u589E\u6536\u85CF", desc: "\u5DF2\u5B58\u5728\u7684\u7B14\u8BB0\u8DF3\u8FC7\uFF08\u9ED8\u8BA4\uFF0C\u6700\u5FEB\uFF09" },
-        { id: "update", text: "\u91CD\u65B0\u540C\u6B65\uFF08\u66F4\u65B0\u5DF2\u6709\u7B14\u8BB0\uFF09", desc: `\u91CD\u65B0\u62C9\u53D6\u5E76\u8986\u5199\uFF1A\u8865\u8F6C\u5199 / \u8865\u603B\u7ED3${hint}` }
-      ];
-      class ModeModal extends SuggestModal {
-        getSuggestions() {
-          return opts;
+      class ModeModal extends Modal {
+        constructor(app, onDone) {
+          super(app);
+          this.onDone = onDone;
+          this.done = false;
         }
-        renderSuggestion(o, el) {
-          el.createEl("div", { text: o.text });
-          el.createEl("div", { text: o.desc, cls: "clipin-mode-desc" });
-        }
-        onChooseSuggestion(o) {
-          resolve(o.id);
+        onOpen() {
+          const { contentEl } = this;
+          contentEl.empty();
+          contentEl.createEl("h3", { text: "\u9009\u62E9\u540C\u6B65\u65B9\u5F0F" });
+          contentEl.createEl("p", {
+            text: "\u4EC5\u540C\u6B65\u65B0\u589E\uFF1A\u8DF3\u8FC7\u5DF2\u5B58\u5728\u7684\u7B14\u8BB0\uFF08\u6700\u5FEB\uFF09\u3002\u91CD\u65B0\u540C\u6B65\uFF1A\u628A\u5DF2\u6709\u7B14\u8BB0\u91CD\u65B0\u62C9\u53D6\u8986\u5199\uFF0C\u8865\u8F6C\u5199/\u8865\u603B\u7ED3\u3002",
+            cls: "clipin-tip"
+          });
+          const row = contentEl.createDiv({ cls: "clipin-btn-row" });
+          const b1 = row.createEl("button", { text: "\u4EC5\u540C\u6B65\u65B0\u589E\u6536\u85CF" });
+          b1.addClass("mod-cta");
+          b1.onclick = () => {
+            this.done = true;
+            this.onDone("new");
+            this.close();
+          };
+          const b2 = row.createEl("button", { text: "\u91CD\u65B0\u540C\u6B65\uFF08\u8865\u8F6C\u5199/\u603B\u7ED3\uFF09" });
+          b2.onclick = () => {
+            this.done = true;
+            this.onDone("update");
+            this.close();
+          };
         }
         onClose() {
-          if (!this.chosen) resolve(null);
+          this.contentEl.empty();
+          if (!this.done) this.onDone(null);
         }
       }
-      const m = new ModeModal(this.app);
-      m.chosen = false;
-      const orig = m.onChooseSuggestion.bind(m);
-      m.onChooseSuggestion = (o) => {
-        m.chosen = true;
-        orig(o);
-      };
+      const m = new ModeModal(this.app, resolve);
       m.open();
     });
   }
@@ -6662,7 +6633,6 @@ var BrowserModal = class extends Modal {
     this.authCookie = authCookie || "";
     this.opts = opts || {};
     this.closed = false;
-    this.cookiesInjected = false;
   }
   onOpen() {
     const { contentEl } = this;
@@ -6680,46 +6650,6 @@ var BrowserModal = class extends Modal {
     this.plugin._log("info", `[browser] \u6253\u5F00\u8BFB\u53D6\u7A97\u53E3\uFF1A${p.name} partition=persist:clipin-${p.id} \u6863\u4F4D=${_prof.name} hasCookie=${hasCookie}`);
     this.webview = makeWebviewEl(contentEl, `persist:clipin-${p.id}`, p.capabilities && p.capabilities.loginUrl || "about:blank", "clipin-webview", _prof);
     attachWebviewGuards(this.webview, this.plugin, "browser");
-    this.webview.addEventListener("dom-ready", async () => {
-      if (this.cookiesInjected) return;
-      this.cookiesInjected = true;
-      const cookieStr = (this.authCookie || "").trim();
-      if (cookieStr) {
-        const ses = getPartitionSession(`persist:clipin-${p.id}`);
-        if (!ses) {
-          this.plugin._log("info", `[webview] \u672C\u73AF\u5883\u4E0D\u652F\u6301\u81EA\u52A8\u6CE8\u5165 Cookie\uFF1B\u8BF7\u5728\u7A97\u53E3\u4E2D\u767B\u5F55\u4E00\u6B21\uFF08\u767B\u5F55\u6001\u6301\u4E45\u4FDD\u5B58\u5728 persist:clipin-${p.id}\uFF09`);
-          return;
-        }
-        try {
-          const host = new URL(this.webview.getURL() || p.capabilities.loginUrl).hostname;
-          const rootDomain = host.split(".").slice(-2).join(".");
-          const pairs = cookieStr.split(";").map((x) => x.trim()).filter((x) => x.includes("="));
-          let setCount = 0;
-          for (const pair of pairs) {
-            const eq = pair.indexOf("=");
-            const name = pair.slice(0, eq).trim();
-            const value = pair.slice(eq + 1).trim();
-            if (!name) continue;
-            const base = { url: "https://" + rootDomain, domain: "." + rootDomain, name, value };
-            try {
-              await ses.cookies.set(base);
-              setCount += 1;
-            } catch (e1) {
-              try {
-                await ses.cookies.set({ ...base, httpOnly: true });
-                setCount += 1;
-              } catch (_) {
-                this.plugin._log("info", `cookie ${name} \u6CE8\u5165\u8DF3\u8FC7\uFF08\u5206\u533A\u5DF2\u6709\u6216\u88AB\u62D2\uFF09\uFF0C\u4E0D\u5F71\u54CD\u767B\u5F55\u6001`);
-              }
-            }
-          }
-          this.plugin._log("info", `\u5DF2\u6CE8\u5165 ${setCount}/${pairs.length} \u6761 cookie \u5230 persist:clipin-${p.id}`);
-          this.webview.reload();
-        } catch (e) {
-          this.plugin._log("info", `\u81EA\u52A8\u6CE8\u5165 Cookie \u672A\u751F\u6548\uFF08${e.message}\uFF09\uFF0C\u8BF7\u5728\u7A97\u53E3\u4E2D\u767B\u5F55\u4E00\u6B21\u5373\u53EF`);
-        }
-      }
-    });
     const row = contentEl.createDiv({ cls: "clipin-btn-row" });
     this.goBtn = row.createEl("button", { text: "\u5DF2\u767B\u5F55\uFF0C\u5F00\u59CB\u8BFB\u53D6" });
     this.goBtn.addClass("mod-cta");
