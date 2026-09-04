@@ -5407,7 +5407,26 @@ function makeRequest() {
 var PINNED_CHROME_VER = "120";
 var PINNED_CHROME_FULL = "120.0.6099.129";
 var MAC_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/" + PINNED_CHROME_VER + ".0.0.0 Safari/537.36";
-var WEBVIEW_PRELOAD = [
+var WEBVIEW_PRELOAD_BASE = [
+  ";(function () {",
+  "  var VER = '" + PINNED_CHROME_VER + "';",
+  "  var FULL = '" + PINNED_CHROME_FULL + "';",
+  '  var brands = [{brand:"Not/A)Brand",version:"8"},{brand:"Chromium",version:VER},{brand:"Google Chrome",version:VER}];',
+  '  var fullVersionList = [{brand:"Not/A)Brand",version:"8.0.0.0"},{brand:"Chromium",version:FULL},{brand:"Google Chrome",version:FULL}];',
+  "  try {",
+  '    Object.defineProperty(navigator, "userAgentData", {',
+  "      get: function () { return {",
+  '        brands: brands, mobile: false, platform: "macOS",',
+  "        getHighEntropyValues: function () {",
+  '          return Promise.resolve({ architecture: "arm", bitness: "64", brands: brands,',
+  '            fullVersionList: fullVersionList, mobile: false, platform: "macOS",',
+  '            platformVersion: "14.0.0", uaFullVersion: FULL });',
+  "        } };",
+  "      }, configurable: true });",
+  "  } catch (_) {}",
+  "})();"
+].join("\n");
+var WEBVIEW_PRELOAD_FULL = [
   ";(function () {",
   "  var VER = '" + PINNED_CHROME_VER + "';",
   "  var FULL = '" + PINNED_CHROME_FULL + "';",
@@ -5504,13 +5523,14 @@ var WEBVIEW_PROFILE = { name: "L3-\u7ADE\u54C1\u590D\u523B", ua: true, preload: 
 function webviewProfile() {
   return WEBVIEW_PROFILE;
 }
-function ensureWebviewPreload() {
+function ensureWebviewPreload(kind) {
   try {
     const fs = require("fs");
     const os = require("os");
     const path = require("path");
-    const p = path.join(os.tmpdir(), "savault-webview-preload.js");
-    fs.writeFileSync(p, WEBVIEW_PRELOAD, "utf8");
+    const isLogin = kind === "login";
+    const p = path.join(os.tmpdir(), isLogin ? "savault-preload-login.js" : "savault-webview-preload.js");
+    fs.writeFileSync(p, isLogin ? WEBVIEW_PRELOAD_BASE : WEBVIEW_PRELOAD_FULL, "utf8");
     return "file://" + p.replace(/\\/g, "/");
   } catch (_) {
     return null;
@@ -5523,7 +5543,7 @@ function makeWebviewEl(contentEl, partitionId, src, cls, opts) {
   wv.setAttribute("partition", partitionId);
   if (o.ua) wv.setAttribute("useragent", MAC_UA);
   if (o.preload) {
-    const preloadUrl = ensureWebviewPreload();
+    const preloadUrl = ensureWebviewPreload(o.preloadKind);
     if (preloadUrl) wv.setAttribute("preload", preloadUrl);
   }
   if (o.allowpopups) wv.setAttribute("allowpopups", "");
@@ -5595,8 +5615,9 @@ var LoginModal = class extends Modal {
     });
     const prof = webviewProfile();
     const url = prof.liteUrl && p.capabilities.liteLoginUrl || p.capabilities.loginUrl || "about:blank";
-    this.plugin._log("info", `[login] \u6253\u5F00\u767B\u5F55\u7A97\u53E3\uFF1A${p.name} partition=persist:clipin-${p.id} \u6863\u4F4D=${prof.name} url=${url} preload=${prof.preload && ensureWebviewPreload() ? "yes" : "no"}`);
-    this.webview = makeWebviewEl(contentEl, `persist:clipin-${p.id}`, url, "clipin-webview", prof);
+    const loginProf = { ...prof, preloadKind: "login" };
+    this.plugin._log("info", `[login] \u6253\u5F00\u767B\u5F55\u7A97\u53E3\uFF1A${p.name} partition=persist:clipin-${p.id} \u6863\u4F4D=${prof.name} url=${url} preload=${prof.preload ? "yes(\u7EAFUA-CH)" : "no"}`);
+    this.webview = makeWebviewEl(contentEl, `persist:clipin-${p.id}`, url, "clipin-webview", loginProf);
     attachWebviewGuards(this.webview, this.plugin, "login");
     contentEl.createEl("p", {
       text: "\u767B\u5F55\u6210\u529F\u540E\u4F1A\u81EA\u52A8\u63D0\u53D6\u5E76\u5173\u95ED\u672C\u7A97\u53E3\uFF0C\u4F60\u4E0D\u7528\u70B9\u4EFB\u4F55\u6309\u94AE\u3002",
