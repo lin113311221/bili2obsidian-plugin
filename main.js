@@ -140,6 +140,8 @@ var require_http = __commonJS({
         } catch (_) {
           out.text = "";
         }
+      } else if (typeof res.text === "string") {
+        out.text = res.text;
       } else if (typeof res.data === "string") {
         out.text = res.data;
       }
@@ -195,7 +197,7 @@ var require_http = __commonJS({
       async function fetchOnce(url, opts) {
         if (!(opts && opts.noThrottle) && !isFast(url)) await throttle();
         const o = opts || {};
-        const res = await request(url, {
+        const call = request.length === 1 ? request({ url, method: o.method || "GET", headers: o.headers || {}, body: o.body, binary: o.binary, throw: false }) : request(url, {
           method: o.method || "GET",
           headers: o.headers || {},
           body: o.body,
@@ -203,6 +205,7 @@ var require_http = __commonJS({
           throw: false
           // 让 4xx/5xx 走返回值而不是抛异常，重试逻辑在下面统一处理
         });
+        const res = await call;
         return normalizeResponse(res, res);
       }
       async function request_with_retry(url, opts) {
@@ -1386,7 +1389,7 @@ var require_xiaohongshu = __commonJS({
         };
         if (auth && auth.cookie) headers["Cookie"] = auth.cookie;
         try {
-          const res = await (http.request ? http.request(item.url, { method: "GET", headers }) : http.fetch(item.url, { method: "GET", headers }));
+          const res = await http.fetch(item.url, { method: "GET", headers });
           const html = res && res.text || "";
           if (!html || html.length < 2e4) return { error: "\u8BE6\u60C5\u9875\u8FD4\u56DE\u5F02\u5E38\uFF08\u957F\u5EA6 " + html.length + "\uFF09" };
           const m = html.match(/window\.__INITIAL_STATE__=(\{[\s\S]+?\})<\/script>/);
@@ -5263,6 +5266,10 @@ var DEFAULT_SETTINGS = {
 };
 function makeRequest() {
   return async function request(url, opts) {
+    if (url && typeof url === "object" && opts === void 0) {
+      opts = url;
+      url = opts.url;
+    }
     const o = opts || {};
     const r = await requestUrl({
       url,
