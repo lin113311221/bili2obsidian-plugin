@@ -1616,15 +1616,21 @@ var require_xiaohongshu = __commonJS({
         if (fetchComments !== false) {
           const commentBodies = [];
           let readOk = 0;
+          let clickedOk = 0, clickedFail = 0;
           for (let i = 0; i < items.length; i++) {
             const it = items[i];
             try {
               const clicked = await webviewHost.eval(`(function(){
             var a = document.querySelector('a[href*="${it.id}"]');
-            if (!a) return false;
-            a.click(); return true;
+            if (!a) return 'not-found';
+            a.click();
+            // \u70B9\u51FB\u540E\u7ACB\u523B\u770B\u5F39\u5C42\u662F\u5426\u51FA\u73B0\uFF08note-detail \u8499\u5C42\uFF09
+            return document.querySelector('.note-detail-mask, [class*="note-detail"]') ? 'opened' : 'clicked-no-dialog';
           })()`);
-              if (!clicked) continue;
+              if (clicked === "opened" || clicked === "clicked-no-dialog") clickedOk++;
+              else clickedFail++;
+              if (i === 0) log(`[xhs] \u8BC4\u8BBA\u8BCA\u65AD\uFF1A\u9996\u6761\u70B9\u51FB\u7ED3\u679C=${clicked}\uFF08not-found=\u9009\u62E9\u5668\u5931\u6548, null=eval\u5931\u8D25, clicked-no-dialog=\u70B9\u4E86\u4F46\u5F39\u5C42\u6CA1\u5F00\uFF09`);
+              if (clicked !== "opened" && clicked !== "clicked-no-dialog") continue;
               await webviewHost.sleep(jitter(600, 300));
               await webviewHost.eval(`(function(){
             var vs = document.querySelectorAll('video');
@@ -1652,7 +1658,15 @@ var require_xiaohongshu = __commonJS({
             } catch (_) {
             }
           }
-          log(`[xhs] \u8BC4\u8BBA\u91C7\u96C6\uFF1A${readOk}/${items.length} \u6761\u8BFB\u5230\u8BC4\u8BBA\uFF08\u62E6\u5230 ${commentBodies.length} \u4E2A\u54CD\u5E94\uFF09`);
+          log(`[xhs] \u8BC4\u8BBA\u91C7\u96C6\uFF1A${readOk}/${items.length} \u6761\u8BFB\u5230\u8BC4\u8BBA\uFF08\u62E6\u5230 ${commentBodies.length} \u4E2A\u54CD\u5E94\uFF1B\u70B9\u51FB\u6210\u529F ${clickedOk}\uFF0C\u70B9\u51FB\u5931\u8D25 ${clickedFail}\uFF09`);
+          if (items.length > 0 && readOk === 0) {
+            try {
+              const allCap = await webviewHost.getCaptured() || [];
+              const urls = allCap.map((x) => x && x.url || "").filter(Boolean).slice(0, 30);
+              log(`[xhs] \u8BC4\u8BBA\u8BCA\u65AD\uFF1A\u6355\u83B7\u6C60\u5171 ${allCap.length} \u4E2A\u54CD\u5E94\uFF0CURL \u5217\u8868=${JSON.stringify(urls)}`);
+            } catch (_) {
+            }
+          }
           if (items.length > 0 && readOk === 0) {
             log("[xhs] \u26A0\uFE0F \u8BC4\u8BBA\u91C7\u96C6\u5931\u6548\uFF1A\u5F00\u4E86\u8BC4\u8BBA\u5F00\u5173\u4F46\u4E00\u6761\u90FD\u6CA1\u8BFB\u5230\u3002\u53EF\u80FD\u5C0F\u7EA2\u4E66\u6539\u7248\u5BFC\u81F4\u5F39\u5C42\u62E6\u622A\u5931\u6548\uFF0C\u8BF7\u628A sync.log \u53D1\u7ED9\u5F00\u53D1\u8005");
           }
