@@ -1616,57 +1616,31 @@ var require_xiaohongshu = __commonJS({
         if (fetchComments !== false) {
           const commentBodies = [];
           let readOk = 0;
-          let clickedOk = 0, clickedFail = 0;
           for (let i = 0; i < items.length; i++) {
             const it = items[i];
             try {
-              const clicked = await webviewHost.eval(`(function(){
-            var a = document.querySelector('a[href*="${it.id}"]');
-            if (!a) return 'not-found';
-            a.click();
-            // \u70B9\u51FB\u540E\u7ACB\u523B\u770B\u5F39\u5C42\u662F\u5426\u51FA\u73B0\uFF08note-detail \u8499\u5C42\uFF09
-            return document.querySelector('.note-detail-mask, [class*="note-detail"]') ? 'opened' : 'clicked-no-dialog';
-          })()`);
-              if (clicked === "opened" || clicked === "clicked-no-dialog") clickedOk++;
-              else clickedFail++;
-              if (i === 0) log(`[xhs] \u8BC4\u8BBA\u8BCA\u65AD\uFF1A\u9996\u6761\u70B9\u51FB\u7ED3\u679C=${clicked}\uFF08not-found=\u9009\u62E9\u5668\u5931\u6548, null=eval\u5931\u8D25, clicked-no-dialog=\u70B9\u4E86\u4F46\u5F39\u5C42\u6CA1\u5F00\uFF09`);
-              if (clicked !== "opened" && clicked !== "clicked-no-dialog") continue;
-              await webviewHost.sleep(jitter(600, 300));
-              await webviewHost.eval(`(function(){
-            var vs = document.querySelectorAll('video');
-            for (var i = 0; i < vs.length; i++) { vs[i].autoplay = false; try { vs[i].pause(); } catch(e){} }
-            return vs.length;
-          })()`);
-              const deadline = Date.now() + 6e3;
-              let got = false;
+              await webviewHost.eval(`(function(){ location.href = ${JSON.stringify(it.url || "")}; return true; })()`);
+              const deadline = Date.now() + 9e3;
+              let got = [];
               while (Date.now() < deadline) {
                 const c = await webviewHost.getCaptured();
-                const has = (c || []).some((x) => x && typeof x.url === "string" && x.url.includes("/comment/page") && x.url.includes(it.id));
-                if (has) {
-                  commentBodies.push(...c.filter((x) => x && x.url && x.url.includes("/comment/page") && x.url.includes(it.id)));
-                  got = true;
-                  break;
-                }
+                got = (c || []).filter((x) => x && x.url && x.url.includes("/comment/page"));
+                if (got.length) break;
                 await webviewHost.sleep(400);
               }
-              if (got) readOk++;
-              await webviewHost.eval(`(function(){
-            document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-            return true;
-          })()`);
-              await webviewHost.sleep(jitter(400, 200));
+              if (got.length) {
+                commentBodies.push(...got);
+                readOk++;
+              }
+              if (i === 0) {
+                const cap0 = await webviewHost.getCaptured() || [];
+                log(`[xhs] \u8BC4\u8BBA\u8BCA\u65AD\uFF1A\u9996\u6761\u8BE6\u60C5\u9875\u6355\u83B7 ${cap0.length} \u4E2A\u54CD\u5E94\uFF0C\u547D\u4E2D\u8BC4\u8BBA ${got.length} \u4E2A\uFF0CURL=${JSON.stringify(cap0.map((x) => x && x.url || "").slice(0, 12))}`);
+              }
+              await webviewHost.sleep(jitter(1200, 600));
             } catch (_) {
             }
           }
-          log(`[xhs] \u8BC4\u8BBA\u91C7\u96C6\uFF1A${readOk}/${items.length} \u6761\u8BFB\u5230\u8BC4\u8BBA\uFF08\u62E6\u5230 ${commentBodies.length} \u4E2A\u54CD\u5E94\uFF1B\u70B9\u51FB\u6210\u529F ${clickedOk}\uFF0C\u70B9\u51FB\u5931\u8D25 ${clickedFail}\uFF09`);
-          if (items.length > 0 && readOk === 0) {
-            try {
-              const allCap = await webviewHost.getCaptured() || [];
-              const urls = allCap.map((x) => x && x.url || "").filter(Boolean).slice(0, 30);
-              log(`[xhs] \u8BC4\u8BBA\u8BCA\u65AD\uFF1A\u6355\u83B7\u6C60\u5171 ${allCap.length} \u4E2A\u54CD\u5E94\uFF0CURL \u5217\u8868=${JSON.stringify(urls)}`);
-            } catch (_) {
-            }
-          }
+          log(`[xhs] \u8BC4\u8BBA\u91C7\u96C6\uFF1A${readOk}/${items.length} \u6761\u8BFB\u5230\u8BC4\u8BBA\uFF08\u62E6\u5230 ${commentBodies.length} \u4E2A\u54CD\u5E94\uFF09`);
           if (items.length > 0 && readOk === 0) {
             log("[xhs] \u26A0\uFE0F \u8BC4\u8BBA\u91C7\u96C6\u5931\u6548\uFF1A\u5F00\u4E86\u8BC4\u8BBA\u5F00\u5173\u4F46\u4E00\u6761\u90FD\u6CA1\u8BFB\u5230\u3002\u53EF\u80FD\u5C0F\u7EA2\u4E66\u6539\u7248\u5BFC\u81F4\u5F39\u5C42\u62E6\u622A\u5931\u6548\uFF0C\u8BF7\u628A sync.log \u53D1\u7ED9\u5F00\u53D1\u8005");
           }
@@ -2997,6 +2971,9 @@ var require_webview_host = __commonJS({
   "plugin/webview-host.js"(exports2, module2) {
     var INJECT_SCRIPT = `(function(){
   var PAT = %PATTERN%;
+  // v0.5.54\uFF1Apreload \u5DF2\u9884\u88C5\u5BBD\u5339\u914D\u62E6\u622A\u5668\uFF08/api/sns/web/ \u5168\u8986\u76D6\uFF09\u5C31\u76F4\u63A5\u7528\u5B83\u7684\u2014\u2014
+  // preload \u662F document-start \u7EA7\uFF0C\u6BD4 dom-ready \u6CE8\u5165\u66F4\u65E9\uFF0C\u8DF3\u9875\u4E5F\u4E0D\u4E22\u3002
+  if (window.__clipin_preloaded) return 'preloaded';
   // \u5DF2\u88C5\u8FC7\u4E14 pattern \u6CA1\u53D8\u624D\u8DF3\u8FC7\uFF1Bpattern \u53D8\u4E86\uFF08\u6BD4\u5982\u4ECE\u6536\u85CF\u5217\u8868\u5207\u5230\u5BBD\u5339\u914D\u55C5\u63A2\uFF09\u8981\u6362\u88C5
   if (window.__clipin_installed && window.__clipin_pat === PAT) return 'already';
   window.__clipin_installed = true;
@@ -5446,6 +5423,49 @@ var WEBVIEW_PRELOAD = [
   '            platformVersion: "14.0.0", uaFullVersion: FULL });',
   "        } };",
   "      }, configurable: true });",
+  "  } catch (_) {}",
+  "",
+  "  // v0.5.54\uFF1A\u62E6\u622A\u5668\u9884\u88C5\uFF08document-start \u7EA7\uFF0C\u9875\u9762\u4EFB\u4F55\u811A\u672C\u4E4B\u524D\u6267\u884C\uFF09\u3002",
+  "  // \u539F\u56E0\uFF1A\u8BC4\u8BBA\u91C7\u96C6\u6539\u8DF3\u9875\u5F0F\u540E\uFF0Cdom-ready \u91CD\u6CE8\u5165\u6709\u4E24\u5904\u6B7B\u7A74\u2014\u2014",
+  "  // \u2460 captureResponses \u8FD4\u56DE\u540E finally \u79FB\u9664\u4E86 dom-ready \u76D1\u542C\uFF0C\u8DF3\u9875\u540E\u6839\u672C\u6CA1\u4EBA\u6CE8\u5165\uFF1B",
+  "  // \u2461 \u5C31\u7B97\u6CE8\u5165\u4E86\uFF0Cdom-ready+300ms \u7684\u5EF6\u8FDF\u4E5F\u53EF\u80FD\u665A\u4E8E\u8BC4\u8BBA\u8BF7\u6C42\u53D1\u51FA\u3002",
+  "  // preload \u662F\u6BCF\u4E2A\u9875\u9762\u52A0\u8F7D\u65F6\u6700\u5148\u8DD1\u7684\u811A\u672C\uFF0C\u4ECE\u8FD9\u91CC\u88C5 hook \u96F6\u6F0F\u62E6\u3002",
+  "  // \u5BBD\u5339\u914D /api/sns/web/ \u8986\u76D6\u5217\u8868+\u8BC4\u8BBA+\u8BE6\u60C5\uFF1B\u53EA\u8BFB\u4E0D\u5199\uFF0C\u4E0D\u5339\u914D\u7684\u4E00\u6982\u4E0D\u78B0\u3002",
+  "  try {",
+  '    var CLIPIN_PAT = "/api/sns/web/";',
+  "    window.__clipin_preloaded = true;",
+  "    window.__clipin_captured = [];",
+  "    var clipinPush = function (url, text) {",
+  "      try {",
+  "        if (!text) return;",
+  "        if (url && url.indexOf(CLIPIN_PAT) === -1) return;",
+  "        var j = JSON.parse(text);",
+  '        if (j) window.__clipin_captured.push({ url: url || "", body: j, at: Date.now() });',
+  "      } catch (e) {}",
+  "    };",
+  "    var _xo = XMLHttpRequest.prototype.open;",
+  "    XMLHttpRequest.prototype.open = function (m, u) { try { this.__clipin_url = u; } catch (e) {} return _xo.apply(this, arguments); };",
+  "    var _xs = XMLHttpRequest.prototype.send;",
+  "    XMLHttpRequest.prototype.send = function () {",
+  "      var self = this;",
+  '      this.addEventListener("load", function () {',
+  '        try { clipinPush(self.__clipin_url || self.responseURL || "", self.responseText || ""); } catch (e) {}',
+  "      });",
+  "      return _xs.apply(this, arguments);",
+  "    };",
+  "    var _xf = window.fetch;",
+  "    window.fetch = function () {",
+  "      var arg = arguments[0];",
+  '      var url = (arg && typeof arg === "object" && arg.url) ? arg.url : String(arg || "");',
+  "      var pr = _xf.apply(this, arguments);",
+  "      try {",
+  "        pr.then(function (r) {",
+  "          try { r.clone().text().then(function (t) { clipinPush(url, t); }); } catch (e) {}",
+  "          return r;",
+  "        }).catch(function () {});",
+  "      } catch (e) {}",
+  "      return pr;",
+  "    };",
   "  } catch (_) {}",
   "})();"
 ].join("\n");
