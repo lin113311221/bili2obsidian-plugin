@@ -5345,6 +5345,8 @@ var DEFAULT_SETTINGS = {
   chatTopK: 8,
   chatMaxTurns: 6,
   fetchTranscript: false,
+  fetchComments: false,
+  // v0.5.49：评论采集开关（v0.5.34 的接线，回退时丢了，补回）
   autoSync: false,
   syncIntervalMin: 60
 };
@@ -6030,6 +6032,7 @@ var ClipinPlugin = class extends Plugin {
           }
         });
         if (!host) return;
+        await this._refreshAuthFromPartition(platformId);
         try {
           list = await p.listCollections({ auth: cfg.auth, http: this.http, webviewHost: host, logger: (m) => this._log("info", m) });
         } catch (e) {
@@ -6291,6 +6294,7 @@ var ClipinPlugin = class extends Plugin {
         new Notice("\u5DF2\u53D6\u6D88\u540C\u6B65\uFF08\u6D4F\u89C8\u5668\u7A97\u53E3\u5DF2\u5173\u95ED\uFF09");
         return;
       }
+      if (needHost) await this._refreshAuthFromPartition(platformId);
       const result = await core.sync({
         provider: p,
         target: this.buildTarget(),
@@ -6303,6 +6307,7 @@ var ClipinPlugin = class extends Plugin {
         quota: { max: FREE_QUOTA, used: this.settings.syncedCount || 0, isPro },
         enrich: {
           transcript: isPro && this.settings.fetchTranscript,
+          fetchComments: !!this.settings.fetchComments,
           asr: { apiKey: this.settings.dashscopeKey || "", model: "" },
           detail: true,
           ai: isPro && this.settings.ai.enabled ? { enabled: true, baseUrl: this.settings.ai.baseUrl, apiKey: this.settings.ai.key, model: this.settings.ai.model } : { enabled: false }
@@ -6377,6 +6382,67 @@ var ClipinPlugin = class extends Plugin {
    * 打开内嵌浏览器（webview 平台用）。
    * 返回一个 Promise，在用户关闭浏览器时用 webview host 兑现。
    */
+  /**
+   * 从窗口分区把登录态同步回 settings（v0.5.49）。
+   * 背景（真机实证）：主页 ribbon → 采集窗口里扫码登录后，cookie 只写进了
+   * persist:clipin-* 分区，settings.platforms.*.auth 没更新——BrowserModal
+   * 没有 LoginModal 的 extract 逻辑。引擎 core.sync({ auth: cfg.auth }) 拿到
+   * 空 cookie → 详情富化（纯 HTTP）报未登录。设置页路径有 extract 所以没事。
+   * 修法：core.sync / listCollections 之前，从分区读一次最新 cookie 回写 settings。
+   * 全程 session.fromPartition（纯主进程 API），不碰 guest。
+   */
+  async _refreshAuthFromPartition(platformId) {
+    const p = core.getProvider(platformId);
+    const cfg = this.settings.platforms[platformId];
+    if (!p || !cfg || !cfg.auth) return;
+    try {
+      const partition = `persist:clipin-${p.id}`;
+      const targetUrl = p.id === "bilibili" ? "https://www.bilibili.com" : p.capabilities && p.capabilities.loginUrl;
+      if (!targetUrl) return;
+      const r = await readPartitionCookies(partition, targetUrl);
+      if (!r || !(r.cookies || []).length) return;
+      const all = r.cookies;
+      let changed = false;
+      if (p.id === "bilibili") {
+        const hit = all.find((c) => c.name === "SESSDATA" && c.value);
+        if (hit && cfg.auth.sessdata !== hit.value) {
+          cfg.auth.sessdata = hit.value;
+          changed = true;
+        }
+      } else {
+        const value = all.map((c) => `${c.name}=${c.value}`).join("; ");
+        if (value && cfg.auth.cookie !== value) {
+          cfg.auth.cookie = value;
+          const a1 = (all.find((c) => c.name === "a1") || {}).value || "";
+          if (a1) cfg.auth.a1 = a1;
+          changed = true;
+        }
+        if (p.id === "xiaohongshu" && cfg.auth.cookie && !cfg.auth.userId) {
+          try {
+            let me = await p.fetchMe(makeRequest(), cfg.auth.cookie);
+            if (!me) {
+              await new Promise((res2) => setTimeout(res2, 2e3));
+              me = await p.fetchMe(makeRequest(), cfg.auth.cookie);
+            }
+            if (me && me.userId) {
+              cfg.auth.userId = me.userId;
+              if (me.nickname) cfg.auth.nickname = me.nickname;
+              changed = true;
+              this._log("info", `[browser] \u5DF2\u4ECE\u5206\u533A\u8865\u5230 userId=${me.userId}`);
+            }
+          } catch (e) {
+            this._log("warn", `[browser] \u8865 userId \u5931\u8D25\uFF1A${e && e.message || e}\uFF08\u4E0D\u963B\u585E\u672C\u6B21\u91C7\u96C6\uFF09`);
+          }
+        }
+      }
+      if (changed) {
+        await this.saveSettings();
+        this._log("info", `[browser] \u5DF2\u628A\u7A97\u53E3\u5206\u533A\u7684\u767B\u5F55\u6001\u540C\u6B65\u56DE\u8BBE\u7F6E\uFF08${p.name}\uFF09`);
+      }
+    } catch (e) {
+      this._log("warn", `[browser] \u540C\u6B65\u5206\u533A\u767B\u5F55\u6001\u5931\u8D25\uFF1A${e && e.message || e}\uFF08\u4E0D\u963B\u585E\uFF09`);
+    }
+  }
   openBrowser(provider, authCookie, opts) {
     return new Promise((resolve) => {
       const modal = new BrowserModal(this.app, this, provider, resolve, authCookie, opts);
@@ -6964,6 +7030,10 @@ var ClipinSettingTab = class extends PluginSettingTab {
         });
         t.inputEl.type = "password";
       });
+      new Setting(containerEl).setName("\u3000\u540C\u6B65\u8BC4\u8BBA").setDesc("\u5728\u4E13\u8F91\u91C7\u96C6\u65F6\u9010\u6761\u70B9\u5F00\u7B14\u8BB0\u8BFB\u8BC4\u8BBA\u533A\uFF08\u7F6E\u9876/\u70ED\u8BC4\u524D 5 \u6761\uFF09\u3002\u26A0\uFE0F \u5B9E\u9A8C\u529F\u80FD\uFF1A\u5F39\u5C42\u62E6\u622A\u94FE\u8DEF\u8F83\u957F\uFF0C\u5C0F\u7EA2\u4E66\u6539\u7248\u540E\u53EF\u80FD\u5931\u6548\uFF1B\u5931\u6548\u65F6\u5F39\u5C42\u4F1A\u6253\u5F00\u4F46\u8BFB\u4E0D\u5230\u8BC4\u8BBA\uFF0C\u53EF\u628A sync.log \u53D1\u7ED9\u5F00\u53D1\u8005").addToggle((g) => g.setValue(!!s.fetchComments).onChange(async (v) => {
+        s.fetchComments = v;
+        await plugin.saveSettings();
+      }));
     }
     new Setting(containerEl).setName("AI \u603B\u7ED3").setDesc(pro ? "\u7528\u4F60\u81EA\u5DF1\u7684 key \u8C03\u7528\u6A21\u578B\uFF0C\u81EA\u52A8\u751F\u6210\u6838\u5FC3\u89C2\u70B9/\u8981\u70B9/\u91D1\u53E5" : "\u6C38\u4E45\u7248\u529F\u80FD").addToggle((g) => g.setValue(pro && s.ai.enabled).setDisabled(!pro).onChange(async (v) => {
       s.ai.enabled = v;
