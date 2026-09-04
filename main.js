@@ -6899,9 +6899,12 @@ var ClipinSettingTab = class extends PluginSettingTab {
       containerEl.createEl("p", {
         text: `\u514D\u8D39\u7248\uFF1A\u7D2F\u8BA1\u53EF\u540C\u6B65 ${FREE_QUOTA} \u6761\uFF08\u5DF2\u7528 ${s.syncedCount || 0}/${FREE_QUOTA}\uFF09`
       });
-      containerEl.createEl("p", {
-        text: "\u6C38\u4E45\u7248\uFF1A\u5168\u5E73\u53F0\u65E0\u9650\u540C\u6B65 + \u9010\u5B57\u7A3F + AI \u603B\u7ED3 \u2192 product.aiprice.store/bili",
-        cls: "clipin-tip"
+      const tipEl = containerEl.createEl("p", { cls: "clipin-tip" });
+      tipEl.appendText("\u6C38\u4E45\u7248\uFF1A\u5168\u5E73\u53F0\u65E0\u9650\u540C\u6B65 + \u9010\u5B57\u7A3F + AI \u603B\u7ED3 \u2192 ");
+      const tipLink = tipEl.createEl("a", { text: "product.aiprice.store/bili", href: "https://product.aiprice.store/bili" });
+      tipLink.onClickEvent((e) => {
+        e.preventDefault();
+        require("electron").shell.openExternal("https://product.aiprice.store/bili");
       });
     }
     new Setting(containerEl).setName("\u6388\u6743\u7801").setDesc(pro ? "\u5DF2\u6FC0\u6D3B" : "\u7C98\u8D34\u8D2D\u4E70\u540E\u83B7\u5F97\u7684\u6388\u6743\u7801\uFF08CLP- \u6216 B2O- \u5F00\u5934\u90FD\u652F\u6301\uFF09").addText((t) => t.setPlaceholder("CLP-...").setValue(s.licenseKey).onChange(async (v) => {
@@ -7068,7 +7071,19 @@ var ClipinSettingTab = class extends PluginSettingTab {
           } finally {
             b.setButtonText("\u91CD\u65B0\u540C\u6B65\uFF08\u8865\u8F6C\u5199/\u603B\u7ED3\uFF09").setDisabled(false);
           }
-        }));
+        })).addButton((b) => {
+          const syncText = () => plugin._syncPaused ? "\u25B6 \u7EE7\u7EED\u540C\u6B65" : "\u23F8 \u6682\u505C\u540C\u6B65";
+          b.setButtonText(syncText()).onClick(() => {
+            if (!plugin._syncing) {
+              new Notice("\u5F53\u524D\u6CA1\u6709\u8FDB\u884C\u4E2D\u7684\u540C\u6B65");
+              return;
+            }
+            plugin._syncPaused = !plugin._syncPaused;
+            b.setButtonText(syncText());
+            if (plugin._pauseBar) plugin._pauseBar.setText(syncText());
+            new Notice(plugin._syncPaused ? "\u5DF2\u6682\u505C\uFF08\u5F53\u524D\u8FD9\u6761\u4F1A\u8DD1\u5B8C\uFF09" : "\u7EE7\u7EED\u540C\u6B65");
+          });
+        });
       }
     }
     containerEl.createEl("h2", { text: "\u589E\u5F3A\u529F\u80FD\uFF08\u6C38\u4E45\u7248\uFF09" });
@@ -7096,7 +7111,9 @@ var ClipinSettingTab = class extends PluginSettingTab {
       await plugin.saveSettings();
     }));
     if (pro) {
-      new Setting(containerEl).setName("\u3000\u63A5\u53E3\u5730\u5740").setDesc("OpenAI \u517C\u5BB9\u63A5\u53E3\u3002\u4E0D\u77E5\u9053\u9009\u54EA\u5BB6\uFF1F\u53BB product.aiprice.store/ask \u6BD4\u4EF7").addText((t) => t.setValue(s.ai.baseUrl).onChange(async (v) => {
+      new Setting(containerEl).setName("\u3000\u63A5\u53E3\u5730\u5740").setDesc("OpenAI \u517C\u5BB9\u63A5\u53E3\u3002\u4E0D\u77E5\u9053\u9009\u54EA\u5BB6\uFF1F\u70B9\u53F3\u8FB9\u6309\u94AE\u53BB\u6BD4\u4EF7").addButton((b) => b.setButtonText("\u53BB\u6BD4\u4EF7 \u2197").onClick(() => {
+        require("electron").shell.openExternal("https://product.aiprice.store/ask");
+      })).addText((t) => t.setValue(s.ai.baseUrl).onChange(async (v) => {
         s.ai.baseUrl = v.trim();
         await plugin.saveSettings();
       }));
