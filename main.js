@@ -5495,7 +5495,20 @@ async function readPartitionCookies(partitionId, url) {
 function attachWebviewGuards(wv, plugin, tag) {
   if (!wv || !plugin) return;
   const log = (m) => plugin._log("info", `[${tag}] ${m}`);
-  wv.addEventListener("dom-ready", () => log(`dom-ready url=${safeUrl(wv)}`));
+  wv.addEventListener("dom-ready", () => {
+    log(`dom-ready url=${safeUrl(wv)}`);
+    try {
+      wv.executeJavaScript(`(function(){
+        try {
+          var vs = document.querySelectorAll('video');
+          for (var i = 0; i < vs.length; i++) { vs[i].autoplay = false; try { vs[i].pause(); } catch(e){} }
+          return vs.length;
+        } catch(e) { return -1; }
+      })();`).catch(() => {
+      });
+    } catch (_) {
+    }
+  });
   wv.addEventListener("did-start-loading", () => log("did-start-loading"));
   wv.addEventListener("did-finish-load", () => log("did-finish-load"));
   wv.addEventListener("new-window", (e) => log(`new-window \u2192 ${e && e.url || ""}`));
@@ -7132,7 +7145,9 @@ var ClipinSettingTab = class extends PluginSettingTab {
           await plugin.saveSettings();
         });
         t.inputEl.type = "password";
-      });
+      }).addButton((b) => b.setButtonText("\u83B7\u53D6 Key \u2197").onClick(() => {
+        require("electron").shell.openExternal("https://bailian.console.aliyun.com/#/api-key");
+      }));
       new Setting(containerEl).setName("\u3000\u540C\u6B65\u8BC4\u8BBA").setDesc("\u5728\u4E13\u8F91\u91C7\u96C6\u65F6\u9010\u6761\u70B9\u5F00\u7B14\u8BB0\u8BFB\u8BC4\u8BBA\u533A\uFF08\u7F6E\u9876/\u70ED\u8BC4\u524D 5 \u6761\uFF09\u3002\u26A0\uFE0F \u5B9E\u9A8C\u529F\u80FD\uFF1A\u5F39\u5C42\u62E6\u622A\u94FE\u8DEF\u8F83\u957F\uFF0C\u5C0F\u7EA2\u4E66\u6539\u7248\u540E\u53EF\u80FD\u5931\u6548\uFF1B\u5931\u6548\u65F6\u5F39\u5C42\u4F1A\u6253\u5F00\u4F46\u8BFB\u4E0D\u5230\u8BC4\u8BBA\uFF0C\u53EF\u628A sync.log \u53D1\u7ED9\u5F00\u53D1\u8005").addToggle((g) => g.setValue(!!s.fetchComments).onChange(async (v) => {
         s.fetchComments = v;
         await plugin.saveSettings();
