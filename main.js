@@ -5467,9 +5467,9 @@ function makeWebviewEl(contentEl, partitionId, src, cls, opts) {
   wv.setAttribute("src", src || "about:blank");
   box.appendChild(wv);
   try {
-    const wc = wv.getWebContents && wv.getWebContents();
-    if (wc && wc.session && wc.session.webRequest) {
-      wc.session.webRequest.onBeforeRequest((details, cb) => {
+    const ses = getPartitionSession(partitionId);
+    if (ses && ses.webRequest && ses.webRequest.onBeforeRequest) {
+      ses.webRequest.onBeforeRequest((details, cb) => {
         const u = String(details.url || "");
         if (/\.(m3u8|mp4|webm|m4v|ts|m4s)(\?|$)/i.test(u) || /xhscdn.*\/stream\//i.test(u) || /sns-video-/i.test(u)) {
           cb({ cancel: true });
@@ -6369,34 +6369,42 @@ var ClipinPlugin = class extends Plugin {
    */
   _chooseSyncMode(reason) {
     return new Promise((resolve) => {
-      const { SuggestModal } = require("obsidian");
       const hint = reason ? `\uFF08${reason}\uFF09` : "";
-      const opts = [
-        { id: "new", text: "\u4EC5\u540C\u6B65\u65B0\u589E\u6536\u85CF", desc: "\u5DF2\u5B58\u5728\u7684\u7B14\u8BB0\u8DF3\u8FC7\uFF08\u9ED8\u8BA4\uFF0C\u6700\u5FEB\uFF09" },
-        { id: "update", text: "\u91CD\u65B0\u540C\u6B65\uFF08\u66F4\u65B0\u5DF2\u6709\u7B14\u8BB0\uFF09", desc: `\u91CD\u65B0\u62C9\u53D6\u5E76\u8986\u5199\uFF1A\u8865\u8F6C\u5199 / \u8865\u603B\u7ED3${hint}` }
-      ];
-      class ModeModal extends SuggestModal {
-        getSuggestions() {
-          return opts;
+      class ModeModal extends Modal {
+        constructor(app, onDone) {
+          super(app);
+          this.onDone = onDone;
+          this.done = false;
         }
-        renderSuggestion(o, el) {
-          el.createEl("div", { text: o.text });
-          el.createEl("div", { text: o.desc, cls: "clipin-mode-desc" });
-        }
-        onChooseSuggestion(o) {
-          resolve(o.id);
+        onOpen() {
+          const { contentEl } = this;
+          contentEl.empty();
+          contentEl.createEl("h3", { text: "\u9009\u62E9\u540C\u6B65\u65B9\u5F0F" });
+          contentEl.createEl("p", {
+            text: "\u4EC5\u540C\u6B65\u65B0\u589E\uFF1A\u8DF3\u8FC7\u5DF2\u5B58\u5728\u7684\u7B14\u8BB0\uFF08\u6700\u5FEB\uFF09\u3002\u91CD\u65B0\u540C\u6B65\uFF1A\u628A\u5DF2\u6709\u7B14\u8BB0\u91CD\u65B0\u62C9\u53D6\u8986\u5199\uFF0C\u8865\u8F6C\u5199/\u8865\u603B\u7ED3\u3002",
+            cls: "clipin-tip"
+          });
+          const row = contentEl.createDiv({ cls: "clipin-btn-row" });
+          const b1 = row.createEl("button", { text: "\u4EC5\u540C\u6B65\u65B0\u589E\u6536\u85CF" });
+          b1.addClass("mod-cta");
+          b1.onclick = () => {
+            this.done = true;
+            this.onDone("new");
+            this.close();
+          };
+          const b2 = row.createEl("button", { text: "\u91CD\u65B0\u540C\u6B65\uFF08\u8865\u8F6C\u5199/\u603B\u7ED3\uFF09" });
+          b2.onclick = () => {
+            this.done = true;
+            this.onDone("update");
+            this.close();
+          };
         }
         onClose() {
-          if (!this.chosen) resolve(null);
+          this.contentEl.empty();
+          if (!this.done) this.onDone(null);
         }
       }
-      const m = new ModeModal(this.app);
-      m.chosen = false;
-      const orig = m.onChooseSuggestion.bind(m);
-      m.onChooseSuggestion = (o) => {
-        m.chosen = true;
-        orig(o);
-      };
+      const m = new ModeModal(this.app, resolve);
       m.open();
     });
   }
