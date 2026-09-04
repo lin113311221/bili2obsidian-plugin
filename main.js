@@ -1634,7 +1634,16 @@ var require_xiaohongshu = __commonJS({
               }
               if (i === 0) {
                 const cap0 = await webviewHost.getCaptured() || [];
+                const landed = await webviewHost.eval(`(function(){
+              return JSON.stringify({
+                href: location.href,
+                title: document.title,
+                videos: document.querySelectorAll('video').length,
+                preloaded: !!window.__clipin_preloaded,
+              });
+            })()`);
                 log(`[xhs] \u8BC4\u8BBA\u8BCA\u65AD\uFF1A\u9996\u6761\u8BE6\u60C5\u9875\u6355\u83B7 ${cap0.length} \u4E2A\u54CD\u5E94\uFF0C\u547D\u4E2D\u8BC4\u8BBA ${got.length} \u4E2A\uFF0CURL=${JSON.stringify(cap0.map((x) => x && x.url || "").slice(0, 12))}`);
+                log(`[xhs] \u8BC4\u8BBA\u8BCA\u65AD\uFF1A\u843D\u5730\u9875=${landed}`);
               }
               await webviewHost.sleep(jitter(1200, 600));
             } catch (_) {
@@ -5463,7 +5472,15 @@ var WEBVIEW_PRELOAD_FULL = [
   "    var clipinVO = new MutationObserver(function () {",
   '      var vs = document.querySelectorAll("video");',
   "      for (var i = 0; i < vs.length; i++) {",
-  '        try { vs[i].pause(); vs[i].removeAttribute("src"); } catch (e) {}',
+  "        try {",
+  "          vs[i].pause();",
+  '          vs[i].removeAttribute("src");',
+  "          // v0.5.58\uFF1A\u5C0F\u7EA2\u4E66\u7684 src \u5728 <source> \u5B50\u5143\u7D20\u4E0A\uFF08\u771F\u673A\u5B9E\u6D4B\u89C6\u9891\u7167\u64AD\uFF09\u2014\u2014",
+  "          // \u5149\u6390 video \u7684 src \u6CA1\u7528\uFF0C\u8981\u628A source \u5B50\u5143\u7D20\u4E5F\u6E05\u6389\u518D load() \u89E6\u53D1\u91CD\u8F7D",
+  '          var srcs = vs[i].querySelectorAll("source");',
+  '          for (var j = 0; j < srcs.length; j++) srcs[j].removeAttribute("src");',
+  "          try { vs[i].load(); } catch (e) {}",
+  "        } catch (e) {}",
   "      }",
   "    });",
   "    try { clipinVO.observe(document.documentElement, { childList: true, subtree: true }); } catch (e) {}",
@@ -5615,9 +5632,8 @@ var LoginModal = class extends Modal {
     });
     const prof = webviewProfile();
     const url = prof.liteUrl && p.capabilities.liteLoginUrl || p.capabilities.loginUrl || "about:blank";
-    const loginProf = { ...prof, preloadKind: "login" };
-    this.plugin._log("info", `[login] \u6253\u5F00\u767B\u5F55\u7A97\u53E3\uFF1A${p.name} partition=persist:clipin-${p.id} \u6863\u4F4D=${prof.name} url=${url} preload=${prof.preload ? "yes(\u7EAFUA-CH)" : "no"}`);
-    this.webview = makeWebviewEl(contentEl, `persist:clipin-${p.id}`, url, "clipin-webview", loginProf);
+    this.plugin._log("info", `[login] \u6253\u5F00\u767B\u5F55\u7A97\u53E3\uFF1A${p.name} partition=persist:clipin-${p.id} \u6863\u4F4D=${prof.name} url=${url} preload=${prof.preload ? "yes" : "no"}`);
+    this.webview = makeWebviewEl(contentEl, `persist:clipin-${p.id}`, url, "clipin-webview", prof);
     attachWebviewGuards(this.webview, this.plugin, "login");
     contentEl.createEl("p", {
       text: "\u767B\u5F55\u6210\u529F\u540E\u4F1A\u81EA\u52A8\u63D0\u53D6\u5E76\u5173\u95ED\u672C\u7A97\u53E3\uFF0C\u4F60\u4E0D\u7528\u70B9\u4EFB\u4F55\u6309\u94AE\u3002",
