@@ -764,6 +764,7 @@ var require_transcript = __commonJS({
 // core/engine.js
 var require_engine = __commonJS({
   "core/engine.js"(exports2, module2) {
+    var sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     var { renderNote, buildFileName, buildDirPath } = require_render();
     var { summarize } = require_ai();
     var { transcribeViaDashscope } = require_transcript();
@@ -860,7 +861,17 @@ var require_engine = __commonJS({
           result.errors.push(`\u300C${col.title}\u300D\u62C9\u53D6\u5931\u8D25\uFF1A${e.message}`);
           continue;
         }
+        let _lastItemStartAt = 0;
         for (const item of items) {
+          while (o.shouldPause && o.shouldPause()) {
+            if (o.shouldAbort && o.shouldAbort()) {
+              result.aborted = true;
+              progress({ phase: "aborted", message: "\u5DF2\u53D6\u6D88" });
+              return result;
+            }
+            progress({ phase: "paused", message: "\u5DF2\u6682\u505C\uFF08\u70B9\u51FB\u72B6\u6001\u680F\u7EE7\u7EED\uFF09" });
+            await sleep(500);
+          }
           if (o.shouldAbort && o.shouldAbort()) {
             result.aborted = true;
             progress({ phase: "aborted", message: "\u5DF2\u53D6\u6D88" });
@@ -881,6 +892,15 @@ var require_engine = __commonJS({
               result.skipped++;
               continue;
             }
+            const _minInterval = o.pace && o.pace.minIntervalMs || 0;
+            if (_lastItemStartAt && _minInterval > 0) {
+              const elapsed = Date.now() - _lastItemStartAt;
+              if (elapsed < _minInterval) {
+                log(`[engine] \u8282\u594F\uFF1A\u8DDD\u4E0A\u4E00\u6761 ${Math.round(elapsed / 1e3)}s\uFF0C\u8865\u7B49 ${Math.round((_minInterval - elapsed) / 1e3)}s`);
+                await sleep(_minInterval - elapsed);
+              }
+            }
+            _lastItemStartAt = Date.now();
             let detail = { content: item.content, transcript: item.transcript, media: item.media };
             if (provider.fetchDetail && (enrich.transcript || enrich.detail)) {
               const d = await provider.fetchDetail({ auth: o.auth, http, item, webviewHost: o.webviewHost, onTokenRefresh: o.onTokenRefresh });
@@ -3121,6 +3141,20 @@ var require_webview_host = __commonJS({
         async isIdleSince(ms) {
           await pull();
           return Date.now() - lastCaptureAt > (ms || 8e3);
+        },
+        /**
+         * 在页面上下文执行任意 JS（v0.5.34：评论采集需要点弹层/暂停视频/模拟 ESC）。
+         * 跨进程调用——但只读不写 guest 内存数据，风险等级与 clickByText 相同。
+         * （v0.5.51：此方法在 v0.5.45 回退时丢失，导致评论采集 34 条全部静默跳过）
+         * @param {string} code
+         * @returns {Promise<*>} 执行结果，失败返回 null
+         */
+        async eval(code) {
+          try {
+            return await webview.executeJavaScript(code);
+          } catch (_) {
+            return null;
+          }
         },
         /** 取回完整捕获（含 URL——专辑发现要靠 URL 辨认接口） */
         async getCaptured() {
@@ -6262,6 +6296,15 @@ var ClipinPlugin = class extends Plugin {
       return;
     }
     this._syncing = true;
+    this._syncPaused = false;
+    this._pauseBar = this.addStatusBarItem();
+    this._pauseBar.setText("\u23F8 \u6682\u505C\u540C\u6B65");
+    this._pauseBar.title = "\u70B9\u51FB\u6682\u505C / \u7EE7\u7EED\u540C\u6B65\uFF08Savault\uFF09";
+    this._pauseBar.onClickEvent(() => {
+      this._syncPaused = !this._syncPaused;
+      this._pauseBar.setText(this._syncPaused ? "\u25B6 \u7EE7\u7EED\u540C\u6B65" : "\u23F8 \u6682\u505C\u540C\u6B65");
+      new Notice(this._syncPaused ? "\u5DF2\u6682\u505C\uFF08\u5F53\u524D\u8FD9\u6761\u4F1A\u8DD1\u5B8C\uFF09" : "\u7EE7\u7EED\u540C\u6B65");
+    });
     this._log("info", `\u5F00\u59CB\u540C\u6B65 ${p.name}\uFF08${platformId}\uFF09`);
     try {
       new Notice(`\u5F00\u59CB\u540C\u6B65 ${p.name}\u2026\uFF08\u5982\u5F39\u51FA\u6D4F\u89C8\u5668\u7A97\u53E3\uFF0C\u767B\u5F55\u540E\u70B9\u300C\u5F00\u59CB\u8BFB\u53D6\u300D\uFF09`);
@@ -6318,6 +6361,9 @@ var ClipinPlugin = class extends Plugin {
           linkAuthor: this.settings.target.obsidian.linkAuthor
         },
         webviewHost: host,
+        // v0.5.51：节奏 60s/条（用户：「每 5 分钟只应该弄 5 篇」）+ 暂停闸门
+        pace: { minIntervalMs: 6e4 },
+        shouldPause: () => this._syncPaused,
         // v0.5.32：采集完成即关窗（富化阶段纯 HTTP，不需要页面在场）
         onCollected: () => {
           if (browserModal) {
@@ -6357,6 +6403,14 @@ var ClipinPlugin = class extends Plugin {
       new Notice("\u540C\u6B65\u5931\u8D25\uFF1A" + e.message);
     } finally {
       this._syncing = false;
+      if (this._pauseBar) {
+        try {
+          this._pauseBar.remove();
+        } catch (_) {
+        }
+        this._pauseBar = null;
+      }
+      this._syncPaused = false;
     }
   }
   /** 同步所有已启用的平台 */
