@@ -640,6 +640,16 @@ var require_render = __commonJS({
         parts.push(transcript);
         parts.push("");
       }
+      const comments = item.raw && item.raw._comments || [];
+      if (comments.length) {
+        parts.push("## \u7CBE\u9009\u8BC4\u8BBA");
+        parts.push("");
+        for (const c of comments.slice(0, 5)) {
+          const likeStr = c.likes > 0 ? `\uFF08${c.likes}\u8D5E\uFF09` : "";
+          parts.push(`- **${c.author}**${likeStr}\uFF1A${c.text}`);
+        }
+        parts.push("");
+      }
       const footer = [];
       parts.push("---");
       parts.push("");
@@ -836,7 +846,9 @@ var require_engine = __commonJS({
             collectionId: col.id,
             collectionTitle: col.title,
             logger: log,
-            onTokenRefresh: o.onTokenRefresh
+            onTokenRefresh: o.onTokenRefresh,
+            // v0.5.34：评论采集开关（默认关，弹层拦截有失效风险）
+            fetchComments: o.enrich && o.enrich.fetchComments
           });
           if (typeof o.onCollected === "function") {
             try {
@@ -1514,7 +1526,7 @@ var require_xiaohongshu = __commonJS({
        * 宿主（Obsidian 插件）负责具体的 webview 操作，provider 只描述"要什么"。
        * 传了 collectionTitle 就只取那个专辑：点进专辑卡片再滚动拦截。
        */
-      async collectViaWebview({ webviewHost, auth, logger, maxScrolls, collectionTitle }) {
+      async collectViaWebview({ webviewHost, auth, logger, maxScrolls, collectionTitle, fetchComments }) {
         const log = logger || (() => {
         });
         if (!auth || !auth.userId) throw new Error("\u8BF7\u5148\u767B\u5F55\u5C0F\u7EA2\u4E66\uFF08\u8BBE\u7F6E\u9875 \u2192 \u767B\u5F55\u5C0F\u7EA2\u4E66\uFF09");
@@ -1581,6 +1593,59 @@ var require_xiaohongshu = __commonJS({
           throw new Error("\u6CA1\u6709\u62E6\u622A\u5230\u4EFB\u4F55\u6536\u85CF\u6570\u636E\u2014\u2014\u767B\u5F55\u6001\u53EF\u80FD\u5DF2\u5931\u6548\u3002\u8BF7\u91CD\u65B0\u767B\u5F55\u540E\u91CD\u8BD5");
         }
         log(`[xhs] \u62E6\u622A\u5230 ${capturedBodies.length} \u4E2A\u54CD\u5E94\uFF0C\u53BB\u91CD\u540E ${items.length} \u6761`);
+        if (fetchComments !== false) {
+          const commentBodies = [];
+          let readOk = 0;
+          for (let i = 0; i < items.length; i++) {
+            const it = items[i];
+            try {
+              const clicked = await webviewHost.eval(`(function(){
+            var a = document.querySelector('a[href*="${it.id}"]');
+            if (!a) return false;
+            a.click(); return true;
+          })()`);
+              if (!clicked) continue;
+              await webviewHost.sleep(jitter(600, 300));
+              await webviewHost.eval(`(function(){
+            var vs = document.querySelectorAll('video');
+            for (var i = 0; i < vs.length; i++) { vs[i].autoplay = false; try { vs[i].pause(); } catch(e){} }
+            return vs.length;
+          })()`);
+              const deadline = Date.now() + 6e3;
+              let got = false;
+              while (Date.now() < deadline) {
+                const c = await webviewHost.getCaptured();
+                const has = (c || []).some((x) => x && typeof x.url === "string" && x.url.includes("/comment/page") && x.url.includes(it.id));
+                if (has) {
+                  commentBodies.push(...c.filter((x) => x && x.url && x.url.includes("/comment/page") && x.url.includes(it.id)));
+                  got = true;
+                  break;
+                }
+                await webviewHost.sleep(400);
+              }
+              if (got) readOk++;
+              await webviewHost.eval(`(function(){
+            document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+            return true;
+          })()`);
+              await webviewHost.sleep(jitter(400, 200));
+            } catch (_) {
+            }
+          }
+          log(`[xhs] \u8BC4\u8BBA\u91C7\u96C6\uFF1A${readOk}/${items.length} \u6761\u8BFB\u5230\u8BC4\u8BBA\uFF08\u62E6\u5230 ${commentBodies.length} \u4E2A\u54CD\u5E94\uFF09`);
+          if (items.length > 0 && readOk === 0) {
+            log("[xhs] \u26A0\uFE0F \u8BC4\u8BBA\u91C7\u96C6\u5931\u6548\uFF1A\u5F00\u4E86\u8BC4\u8BBA\u5F00\u5173\u4F46\u4E00\u6761\u90FD\u6CA1\u8BFB\u5230\u3002\u53EF\u80FD\u5C0F\u7EA2\u4E66\u6539\u7248\u5BFC\u81F4\u5F39\u5C42\u62E6\u622A\u5931\u6548\uFF0C\u8BF7\u628A sync.log \u53D1\u7ED9\u5F00\u53D1\u8005");
+          }
+          for (const body of commentBodies) {
+            const comments = extractComments(body);
+            if (!comments.length) continue;
+            const m = (body && body.url || "").match(/note_id=([0-9a-f]{24})/);
+            const nid = m ? m[1] : "";
+            if (!nid) continue;
+            const target = items.find((x) => x.id === nid);
+            if (target) target.raw._comments = comments;
+          }
+        }
         return items;
       },
       /** 解析单元（供测试与未来 direct 模式复用） */
@@ -1610,6 +1675,26 @@ var require_xiaohongshu = __commonJS({
             }
           }
         });
+      }
+      return out;
+    }
+    function extractComments(captured) {
+      const body = captured && captured.body ? captured.body : captured;
+      const list = body && body.data && body.data.comments || [];
+      const out = [];
+      for (const c of list) {
+        if (!c || typeof c !== "object") continue;
+        const user = c.user_info || c.user || {};
+        const nickname = user.nickname || user.nick_name || "";
+        const text = c.content || c.note_content || "";
+        if (!text) continue;
+        out.push({
+          author: nickname,
+          text: String(text).slice(0, 500),
+          // 防超长评论撑爆笔记
+          likes: Number(c.like_count || c.likes || 0)
+        });
+        if (out.length >= 5) break;
       }
       return out;
     }
@@ -1675,6 +1760,7 @@ var require_xiaohongshu = __commonJS({
     module2.exports = xiaohongshu;
     module2.exports.COLLECT_API_PATTERN = COLLECT_API_PATTERN;
     module2.exports.parseCount = parseCount;
+    module2.exports.extractComments = extractComments;
     module2.exports.pickVideoUrl = pickVideoUrl;
     module2.exports.extractAlbums = extractAlbums;
     module2.exports.extractNotes = extractNotes;
@@ -3035,6 +3121,19 @@ var require_webview_host = __commonJS({
         async isIdleSince(ms) {
           await pull();
           return Date.now() - lastCaptureAt > (ms || 8e3);
+        },
+        /**
+         * 在页面上下文执行任意 JS（v0.5.34：评论采集需要点弹层/暂停视频/模拟 ESC）。
+         * 跨进程调用——但只读不写 guest 内存数据，风险等级与 clickByText 相同。
+         * @param {string} code
+         * @returns {Promise<*>} 执行结果，失败返回 null
+         */
+        async eval(code) {
+          try {
+            return await webview.executeJavaScript(code);
+          } catch (_) {
+            return null;
+          }
         },
         /** 取回完整捕获（含 URL——专辑发现要靠 URL 辨认接口） */
         async getCaptured() {
@@ -5261,6 +5360,8 @@ var DEFAULT_SETTINGS = {
   chatTopK: 8,
   chatMaxTurns: 6,
   fetchTranscript: false,
+  // 评论采集（v0.5.34）：默认关——弹层拦截链路较长，有失效风险
+  fetchComments: false,
   autoSync: false,
   syncIntervalMin: 60
 };
@@ -6328,6 +6429,8 @@ var ClipinPlugin = class extends Plugin {
           transcript: isPro && this.settings.fetchTranscript,
           asr: { apiKey: this.settings.dashscopeKey || "", model: "" },
           detail: true,
+          // v0.5.34：评论采集开关（默认关，弹层拦截有失效风险）
+          fetchComments: !!this.settings.fetchComments,
           ai: isPro && this.settings.ai.enabled ? { enabled: true, baseUrl: this.settings.ai.baseUrl, apiKey: this.settings.ai.key, model: this.settings.ai.model } : { enabled: false }
         },
         renderOpts: {
@@ -6361,6 +6464,8 @@ var ClipinPlugin = class extends Plugin {
       });
       this._log("info", `[${p.name}] \u540C\u6B65\u7ED3\u675F created=${result.created} skipped=${result.skipped} failed=${result.failed} quotaHit=${result.quotaHit} aborted=${result.aborted}`);
       for (const err of result.errors || []) this._log("error", `[${p.name}] ${err}`);
+      if (this.settings.fetchComments && p.id === "xiaohongshu") {
+      }
       this.settings.syncedCount = (this.settings.syncedCount || 0) + Math.max(0, result.created);
       await this.saveSettings();
       if (result.quotaHit) {
@@ -7028,6 +7133,10 @@ var ClipinSettingTab = class extends PluginSettingTab {
         });
         t.inputEl.type = "password";
       });
+      new Setting(containerEl).setName("\u3000\u540C\u6B65\u8BC4\u8BBA").setDesc("\u5728\u4E13\u8F91\u91C7\u96C6\u65F6\u9010\u6761\u70B9\u5F00\u7B14\u8BB0\u8BFB\u8BC4\u8BBA\u533A\uFF08\u7F6E\u9876/\u70ED\u8BC4\u524D 5 \u6761\uFF09\u3002\u26A0\uFE0F \u5B9E\u9A8C\u529F\u80FD\uFF1A\u5F39\u5C42\u62E6\u622A\u94FE\u8DEF\u8F83\u957F\uFF0C\u5C0F\u7EA2\u4E66\u6539\u7248\u540E\u53EF\u80FD\u5931\u6548\uFF1B\u5931\u6548\u65F6\u5F39\u5C42\u4F1A\u6253\u5F00\u4F46\u8BFB\u4E0D\u5230\u8BC4\u8BBA\uFF0C\u53EF\u628A sync.log \u53D1\u7ED9\u5F00\u53D1\u8005").addToggle((g) => g.setValue(!!s.fetchComments).onChange(async (v) => {
+        s.fetchComments = v;
+        await plugin.saveSettings();
+      }));
     }
     new Setting(containerEl).setName("AI \u603B\u7ED3").setDesc(pro ? "\u7528\u4F60\u81EA\u5DF1\u7684 key \u8C03\u7528\u6A21\u578B\uFF0C\u81EA\u52A8\u751F\u6210\u6838\u5FC3\u89C2\u70B9/\u8981\u70B9/\u91D1\u53E5" : "\u6C38\u4E45\u7248\u529F\u80FD").addToggle((g) => g.setValue(pro && s.ai.enabled).setDisabled(!pro).onChange(async (v) => {
       s.ai.enabled = v;
