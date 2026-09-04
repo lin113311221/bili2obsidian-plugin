@@ -3171,24 +3171,6 @@ var require_webview_host = __commonJS({
           const onDomReady = async () => {
             await sleep(300);
             await inject(pattern);
-            try {
-              await webview.executeJavaScript(`(function(){
-            try {
-              if (document.getElementById('savault-no-video')) return 'already';
-              var st = document.createElement('style');
-              st.id = 'savault-no-video';
-              st.textContent = 'video{display:none!important}';
-              document.head.appendChild(st);
-              var obs = new MutationObserver(function(){
-                var vs = document.querySelectorAll('video');
-                for (var i = 0; i < vs.length; i++) { vs[i].autoplay = false; try { vs[i].pause(); } catch(e){} }
-              });
-              obs.observe(document.body, { childList: true, subtree: true });
-              return 'ok';
-            } catch(e) { return 'err:' + e.message; }
-          })();`);
-            } catch (_) {
-            }
           };
           webview.addEventListener("dom-ready", onDomReady);
           try {
@@ -5342,7 +5324,8 @@ var DEFAULT_SETTINGS = {
   licenseValid: false,
   syncedCount: 0,
   // 内嵌浏览器兼容档位（v0.5.15）：崩溃一次自动降一档，见 WEBVIEW_PROFILES
-  webviewProfile: 3,
+  webviewProfile: 5,
+  // v0.5.43：默认 L5-轻量登录（/login 无视频流，不崩）
   platforms: {
     bilibili: { enabled: true, auth: { sessdata: "" }, collections: [], userLabel: "" },
     xiaohongshu: { enabled: false, auth: { cookie: "", userId: "" }, collections: [], userLabel: "" },
@@ -5427,14 +5410,18 @@ var WEBVIEW_PROFILES = [
   // （真凶是 webview 上的 border-radius，跟页面内容无关），
   // 而竞品恰恰加载满屏视频的 /explore 都不崩 —— 那就跟它保持一模一样。
   { name: "L3-\u7ADE\u54C1\u590D\u523B", ua: true, preload: true, webprefs: false, allowpopups: false, liteUrl: false },
-  { name: "L4-\u88F8\u5954", ua: false, preload: false, webprefs: false, allowpopups: false, liteUrl: true }
+  { name: "L4-\u88F8\u5954", ua: false, preload: false, webprefs: false, allowpopups: false, liteUrl: true },
+  // v0.5.43：新增 L5-轻量登录——登录窗口加载 /login（纯登录页，没有视频流），
+  // 采集窗口仍走 /explore（需要页面内容来做拦截）。账号被风控后（461 captcha），
+  // partition 里的脏状态会导致 /explore 加载即崩；/login 没有信息流，不会崩。
+  { name: "L5-\u8F7B\u91CF\u767B\u5F55", ua: true, preload: true, webprefs: false, allowpopups: false, liteUrl: true }
   // ⚠️ 不许再往这张表里加「离屏/invisible」档（v0.5.21 血的教训）：
   // 这张表驱动的是登录/取数弹窗——用户必须看得见页面。v0.5.16 加过 L5 离屏档
   // （1×1 移出视口），崩溃自愈把档位一路降到 L5 并**持久化**，于是真凶修好之后
   // 用户打开登录窗仍然一片空白。离屏只适合「用户不需要看见」的后台 webview，
   // 那种组件如果有，应该自己写死样式，绝不能进这张通用档位表。
 ];
-var DEFAULT_WEBVIEW_PROFILE = 3;
+var DEFAULT_WEBVIEW_PROFILE = 5;
 function webviewProfile(level) {
   const i = Math.max(0, Math.min(Number(level) || 0, WEBVIEW_PROFILES.length - 1));
   return WEBVIEW_PROFILES[i];
@@ -5466,20 +5453,6 @@ function makeWebviewEl(contentEl, partitionId, src, cls, opts) {
   if (cls) wv.setAttribute("class", cls);
   wv.setAttribute("src", src || "about:blank");
   box.appendChild(wv);
-  try {
-    const ses = getPartitionSession(partitionId);
-    if (ses && ses.webRequest && ses.webRequest.onBeforeRequest) {
-      ses.webRequest.onBeforeRequest((details, cb) => {
-        const u = String(details.url || "");
-        if (/\.(m3u8|mp4|webm|m4v|ts|m4s)(\?|$)/i.test(u) || /xhscdn.*\/stream\//i.test(u) || /sns-video-/i.test(u)) {
-          cb({ cancel: true });
-        } else {
-          cb({ cancel: false });
-        }
-      });
-    }
-  } catch (_) {
-  }
   return wv;
 }
 function webviewCanAccessWebContents(wv) {
@@ -5511,25 +5484,7 @@ async function readPartitionCookies(partitionId, url) {
 function attachWebviewGuards(wv, plugin, tag) {
   if (!wv || !plugin) return;
   const log = (m) => plugin._log("info", `[${tag}] ${m}`);
-  wv.addEventListener("dom-ready", () => {
-    log(`dom-ready url=${safeUrl(wv)}`);
-    try {
-      wv.executeJavaScript(`(function(){
-        try {
-          if (document.getElementById('savault-no-video')) return 'already';
-          var st = document.createElement('style');
-          st.id = 'savault-no-video';
-          // \u5173\u952E\uFF1A\u8FDE video \u5BB9\u5668\u4E00\u8D77\u9690\u85CF\u2014\u2014\u5C0F\u7EA2\u4E66 explore \u7684\u5361\u7247
-          // \u6574\u4E2A .note-item \u91CC\u90FD\u6709 video/canvas\uFF0C\u53CC\u7BA1\u9F50\u4E0B
-          st.textContent = 'video,canvas,.player,.video-container{display:none!important}';
-          (document.head || document.documentElement).appendChild(st);
-          return 'ok';
-        } catch(e) { return 'err:' + e.message; }
-      })();`).catch(() => {
-      });
-    } catch (_) {
-    }
-  });
+  wv.addEventListener("dom-ready", () => log(`dom-ready url=${safeUrl(wv)}`));
   wv.addEventListener("did-start-loading", () => log("did-start-loading"));
   wv.addEventListener("did-finish-load", () => log("did-finish-load"));
   wv.addEventListener("new-window", (e) => log(`new-window \u2192 ${e && e.url || ""}`));
