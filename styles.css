@@ -50,31 +50,38 @@
   margin-top: 0;
 }
 
-/* 内嵌浏览器容器（v0.5.18）：圆角、边框、裁剪**全部由容器负责**。
+/* 内嵌浏览器容器：只负责定位与尺寸，不做任何视觉装饰。
 
-   ⚠️ 千万别把 border-radius 加回 webview 本身。
+   ⚠️ 别给 webview **本身**加 border-radius：
    <webview> 是跨进程 iframe（本质上是个 "window" 实例），它**不服从**自身的
    border-radius —— 内容会直接 break out 出去，视觉上根本不生效；
    但 Chromium 仍会为这个跨进程内容尝试做圆角裁剪（rounded-corner masking），
-   需要额外开一个 GPU render surface。在有 GPU 沙箱/驱动问题的 Windows 机器上
-   这会在首次合成时把整个应用带崩 —— 现象正是「加载完 1~2 秒后 Obsidian 无声消失」。
+   需要额外开一个 GPU render surface，在有 GPU 沙箱/驱动问题的 Windows 机器上
+   会在首次合成时把整个应用带崩 —— 现象正是「加载完 1~2 秒后 Obsidian 无声消失」。
 
-   这也是连续 6 个版本（v0.5.10~v0.5.15）改页面内容/UA/分区全部无效的原因：
-   那时候所有「兼容档位」只改 JS 属性，CSS 是共用的，所以降到底也照样崩。
+   ⚠️ v0.5.46：也别给**容器**加 border-radius（v0.5.18 的错误结论，见下）。
+   把圆角从 webview 挪到容器上**没有解决任何问题**：容器 overflow:hidden +
+   border-radius 包裹着同一个跨进程 webview，Chromium 照样要为 guest 画面做
+   圆角裁剪，机制一模一样。当年以为修好了，实际只是从 v0.5.18 开始每个版本
+   都带着它 —— 这也是后来回退到任何历史版本（含确认跑通过的 v0.5.33）都照样
+   崩的原因：CSS 从没被回退过，它不在 diff 范围里。
 
-   正确写法来自已跑通的竞品 xhs2obsidian（styles.css:13-23）：
-   容器 overflow:hidden + border-radius，webview 本身 border:none。 */
+   正确写法 = 竞品 xhs2obsidian（styles.css:13-23）：容器只有 flex + overflow:hidden，
+   没有 border-radius / border / background。要装饰就加在不包裹 webview 的元素上。 */
 .clipin-webview-container {
   flex: 1 1 auto;
-  /* min-height 必须 0：容器高度由「弹窗固定 640 高 - 头部文字 - 按钮行」算出，
-     是确定值，webview 首次布局即到位。给 min-height 反而会破坏收缩链。 */
   min-height: 0;
   position: relative;
   overflow: hidden;
   width: 100%;
-  border: 1px solid var(--background-modifier-border);
-  border-radius: 8px;
-  background: var(--background-secondary);
+  /* ⚠️ 这一层绝对不许加 border-radius / border / background（v0.5.46 真凶）。
+     v0.5.18 把圆角从 webview 挪到容器上，以为解决了——其实机制一模一样：
+     容器 overflow:hidden + border-radius 包裹跨进程 webview，Chromium 仍要为
+     guest 画面做圆角裁剪 → 额外 GPU render surface → Windows 上首次合成时
+     带崩**整个 Obsidian 进程**（不是渲染进程，所以日志里永远没有
+     render-process-gone，直接整机消失、来不及写日志）。
+     竞品 xhs2obsidian 的容器就是 flex:1 + overflow:hidden，别的什么都没有。
+     视觉要圆角/描边就加在不包裹 webview 的元素上。 */
 }
 
 /* webview 本体：保持直角、无边框。任何圆角/边框都会触发上面的合成问题。 */

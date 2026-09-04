@@ -5326,8 +5326,6 @@ var DEFAULT_SETTINGS = {
   licenseKey: "",
   licenseValid: false,
   syncedCount: 0,
-  // 内嵌浏览器兼容档位（v0.5.15）：崩溃一次自动降一档，见 WEBVIEW_PROFILES
-  webviewProfile: 3,
   platforms: {
     bilibili: { enabled: true, auth: { sessdata: "" }, collections: [], userLabel: "" },
     xiaohongshu: { enabled: false, auth: { cookie: "", userId: "" }, collections: [], userLabel: "" },
@@ -5401,26 +5399,9 @@ var WEBVIEW_PRELOAD = [
   "  } catch (_) {}",
   "})();"
 ].join("\n");
-var WEBVIEW_PROFILES = [
-  { name: "L0-\u5B8C\u6574", ua: true, preload: true, webprefs: true, allowpopups: true, liteUrl: false },
-  { name: "L1-\u65E0\u6269\u5C55\u9879", ua: true, preload: true, webprefs: false, allowpopups: false, liteUrl: false },
-  { name: "L2-\u65E0preload", ua: true, preload: false, webprefs: false, allowpopups: false, liteUrl: true },
-  // L3 竞品复刻：与 xhs2obsidian 完全一致 —— Mac UA + preload + 加载 /explore。
-  // v0.5.20 起不再用 liteUrl：「登录页更轻所以不崩」的假设已被证伪
-  // （真凶是 webview 上的 border-radius，跟页面内容无关），
-  // 而竞品恰恰加载满屏视频的 /explore 都不崩 —— 那就跟它保持一模一样。
-  { name: "L3-\u7ADE\u54C1\u590D\u523B", ua: true, preload: true, webprefs: false, allowpopups: false, liteUrl: false },
-  { name: "L4-\u88F8\u5954", ua: false, preload: false, webprefs: false, allowpopups: false, liteUrl: true }
-  // ⚠️ 不许再往这张表里加「离屏/invisible」档（v0.5.21 血的教训）：
-  // 这张表驱动的是登录/取数弹窗——用户必须看得见页面。v0.5.16 加过 L5 离屏档
-  // （1×1 移出视口），崩溃自愈把档位一路降到 L5 并**持久化**，于是真凶修好之后
-  // 用户打开登录窗仍然一片空白。离屏只适合「用户不需要看见」的后台 webview，
-  // 那种组件如果有，应该自己写死样式，绝不能进这张通用档位表。
-];
-var DEFAULT_WEBVIEW_PROFILE = 3;
-function webviewProfile(level) {
-  const i = Math.max(0, Math.min(Number(level) || 0, WEBVIEW_PROFILES.length - 1));
-  return WEBVIEW_PROFILES[i];
+var WEBVIEW_PROFILE = { name: "L3-\u7ADE\u54C1\u590D\u523B", ua: true, preload: true, webprefs: false, allowpopups: false, liteUrl: false };
+function webviewProfile() {
+  return WEBVIEW_PROFILE;
 }
 function ensureWebviewPreload() {
   try {
@@ -5435,7 +5416,7 @@ function ensureWebviewPreload() {
   }
 }
 function makeWebviewEl(contentEl, partitionId, src, cls, opts) {
-  const o = opts || webviewProfile(DEFAULT_WEBVIEW_PROFILE);
+  const o = opts || webviewProfile();
   const box = contentEl.createDiv({ cls: "clipin-webview-container" });
   const wv = document.createElement("webview");
   wv.setAttribute("partition", partitionId);
@@ -5548,7 +5529,7 @@ var LoginModal = class extends Modal {
       text: "\u5728\u4E0B\u65B9\u7A97\u53E3\u767B\u5F55\uFF0C\u6210\u529F\u540E\u4F1A\u81EA\u52A8\u63D0\u53D6\u5E76\u5173\u95ED\u3002",
       cls: "clipin-tip"
     });
-    const prof = webviewProfile(this.plugin.settings.webviewProfile);
+    const prof = webviewProfile();
     const url = prof.liteUrl && p.capabilities.liteLoginUrl || p.capabilities.loginUrl || "about:blank";
     this.plugin._log("info", `[login] \u6253\u5F00\u767B\u5F55\u7A97\u53E3\uFF1A${p.name} partition=persist:clipin-${p.id} \u6863\u4F4D=${prof.name} url=${url} preload=${prof.preload && ensureWebviewPreload() ? "yes" : "no"}`);
     this.webview = makeWebviewEl(contentEl, `persist:clipin-${p.id}`, url, "clipin-webview", prof);
@@ -5796,10 +5777,6 @@ var ClipinPlugin = class extends Plugin {
     this._crashedLastRun = this._recoverCrashedPartitions();
     await this.migrateLegacySettings();
     await this.loadSettings();
-    const crashedOnThisVersion = (this.settings.bootVersion || "") === this.manifest.version;
-    this.settings.bootVersion = this.manifest.version;
-    this._resetStaleWebviewProfile();
-    this._applyCrashFallback(crashedOnThisVersion);
     this.http = core.createHttp({
       request: makeRequest(),
       // 限速（2026-09-03 用户要求，防风控）：
@@ -5990,63 +5967,6 @@ var ClipinPlugin = class extends Plugin {
       this._log("info", `[env] ${JSON.stringify(info)}`);
     } catch (_) {
     }
-  }
-  /**
-   * 档位卫生（v0.5.21）：别让持久化的档位把新版本的修复成果抵消掉。
-   *
-   * 教训（真机实锤）：v0.5.10~0.5.18 连崩 7 次，自动降档把 webviewProfile
-   * 一路降到 5（离屏档）并持久化。v0.5.18 修好真凶后，档位仍卡在离屏档，
-   * 登录窗打开就是一片空白 —— 修复完全没机会生效。
-   *
-   * 规则：
-   * 1. 越界钳制：档位表会随版本变化（比如删掉某档），旧值可能越界 → 拉回默认
-   * 2. 版本绑定：自动降档只在**同一版本**内累积；插件一更新（版本号变了），
-   *    说明代码变了、可能就修好了 → 自动回默认档重新验证。
-   * 3. 旧数据迁移：没有 crashedAt 标记但档位被降过（> 默认档）的，
-   *    只可能是旧版本自动降档留下的 → 同样重置一次。
-   *    手动降档的用户会被误伤一次，但档位就在设置页，他们能一眼看到、随手调回。
-   */
-  _resetStaleWebviewProfile() {
-    try {
-      const cur = Number(this.settings.webviewProfile);
-      const maxIdx = WEBVIEW_PROFILES.length - 1;
-      const crashedAt = this.settings.webviewProfileCrashedAt || "";
-      const outOfRange = !Number.isFinite(cur) || cur < 0 || cur > maxIdx;
-      const staleAutoDrop = crashedAt && crashedAt !== this.manifest.version;
-      const legacyAutoDrop = !crashedAt && Number.isFinite(cur) && cur > DEFAULT_WEBVIEW_PROFILE;
-      if (!outOfRange && !staleAutoDrop && !legacyAutoDrop) return;
-      const from = Number.isFinite(cur) ? webviewProfile(cur).name : String(this.settings.webviewProfile);
-      this.settings.webviewProfile = DEFAULT_WEBVIEW_PROFILE;
-      this.settings.webviewProfileCrashedAt = "";
-      this._log("info", `[webview] \u6863\u4F4D\u91CD\u7F6E\u4E3A\u9ED8\u8BA4\uFF08${webviewProfile(DEFAULT_WEBVIEW_PROFILE).name}\uFF09\uFF1A\u539F\u6863\u4F4D ${from}` + (outOfRange ? " \u8D8A\u754C\uFF08\u6863\u4F4D\u8868\u5DF2\u53D8\u66F4\uFF09" : "") + (staleAutoDrop ? ` \u662F ${crashedAt} \u5D29\u6E83\u65F6\u81EA\u52A8\u964D\u7684\uFF0C\u5F53\u524D\u5DF2\u662F ${this.manifest.version}` : "") + (legacyAutoDrop ? " \u662F\u65E7\u7248\u672C\u81EA\u52A8\u964D\u6863\u7684\u9057\u7559\uFF08\u65E0\u7248\u672C\u6807\u8BB0\uFF09" : ""));
-      this.saveSettings();
-    } catch (_) {
-    }
-  }
-  _applyCrashFallback(crashedOnThisVersion) {
-    if (!this._crashedLastRun) return;
-    if (!crashedOnThisVersion) {
-      this._log("info", "[webview] \u4E0A\u6B21\u5D29\u6E83\u53D1\u751F\u5728\u65E7\u7248\u672C\uFF0C\u672C\u6B21\u4E0D\u964D\u6863\uFF08\u5148\u8BA9\u65B0\u4EE3\u7801\u9A8C\u8BC1\uFF09");
-      return;
-    }
-    const cur = Number(this.settings.webviewProfile);
-    const maxIdx = WEBVIEW_PROFILES.length - 1;
-    const next = Math.min((Number.isFinite(cur) ? cur : DEFAULT_WEBVIEW_PROFILE) + 1, maxIdx);
-    if (next === cur) {
-      this._log("error", `\u5DF2\u662F\u6700\u4F4E\u517C\u5BB9\u6863\u4F4D\uFF08${webviewProfile(cur).name}\uFF09\u4ECD\u7136\u5D29\u6E83\uFF1A\u672C\u673A\u5185\u5D4C\u6D4F\u89C8\u5668\u4E0D\u53EF\u7528\uFF0C\u8BF7\u6539\u7528\u626B\u7801\u767B\u5F55`);
-      setTimeout(() => {
-        const qrPlatforms = PLATFORM_ORDER.map((id) => core.getProvider(id)).filter((p) => p && p.qrLogin).map((p) => p.name);
-        new Notice(
-          `Savault\uFF1A\u5185\u5D4C\u6D4F\u89C8\u5668\u5728\u8FD9\u53F0\u673A\u5668\u4E0A\u59CB\u7EC8\u4F1A\u5D29\u6E83\uFF08\u5DF2\u8BD5\u5230\u6700\u4FDD\u5B88\u914D\u7F6E\uFF09\u3002` + (qrPlatforms.length ? `\u8BF7\u6539\u7528\u300C\u626B\u7801\u767B\u5F55\u300D\u2014\u2014${qrPlatforms.join("\u3001")}\u652F\u6301\uFF0C\u4E0D\u52A0\u8F7D\u7F51\u9875\uFF0C\u4E0D\u4F1A\u5D29\u6E83\u3002` : `\u8BF7\u6539\u7528\u300C\u7CFB\u7EDF\u6D4F\u89C8\u5668\u300D\u6309\u94AE\u767B\u5F55\uFF0C\u6216\u5728\u4E0B\u65B9\u624B\u52A8\u7C98\u8D34\u51ED\u8BC1\u3002`),
-          15e3
-        );
-      }, 2e3);
-      return;
-    }
-    this.settings.webviewProfile = next;
-    this.settings.webviewProfileCrashedAt = this.manifest.version;
-    this.saveSettings();
-    this._log("warn", `\u4E0A\u6B21\u5D29\u6E83\uFF0C\u5185\u5D4C\u6D4F\u89C8\u5668\u517C\u5BB9\u6863\u4F4D\u81EA\u52A8\u964D\u7EA7\uFF1A${webviewProfile(cur).name} \u2192 ${webviewProfile(next).name}\uFF08\u4EC5\u5F53\u524D\u7248\u672C ${this.manifest.version} \u5185\u6709\u6548\uFF0C\u63D2\u4EF6\u66F4\u65B0\u540E\u81EA\u52A8\u56DE\u9ED8\u8BA4\uFF09`);
   }
   /** 把 persist:clipin-* 分区改名隔离（不删，留底可查）。供自愈与设置页手动重置共用。 */
   _quarantinePartitions(reason) {
@@ -6756,7 +6676,7 @@ var BrowserModal = class extends Modal {
       text: this.opts.title ? "" : hasCookie ? "\u68C0\u6D4B\u5230\u8BBE\u7F6E\u91CC\u7684\u767B\u5F55\u4FE1\u606F\uFF0C\u4F1A\u81EA\u52A8\u5C1D\u8BD5\u514D\u767B\u5F55\u3002\u82E5\u7A97\u53E3\u4ECD\u662F\u767B\u5F55\u9875\uFF0C\u8BF7\u5728\u6B64\u767B\u5F55\u4E00\u6B21\uFF08\u53EA\u9700\u8FD9\u4E00\u6B21\uFF0C\u4E4B\u540E\u81EA\u52A8\u4FDD\u6301\uFF09\u3002\u786E\u8BA4\u767B\u5F55\u540E\u70B9\u300C\u5F00\u59CB\u8BFB\u53D6\u300D\u3002" : "\u6B64\u7A97\u53E3\u5C31\u662F\u6D4F\u89C8\u5668\uFF1A\u767B\u5F55\u4E00\u6B21\u540E\u70B9\u300C\u5F00\u59CB\u8BFB\u53D6\u300D\uFF1B\u767B\u5F55\u6001\u4F1A\u81EA\u52A8\u4FDD\u5B58\uFF0C\u4EE5\u540E\u4E0D\u7528\u518D\u767B\u3002",
       cls: "clipin-tip"
     });
-    const _prof = webviewProfile(this.plugin.settings.webviewProfile);
+    const _prof = webviewProfile();
     this.plugin._log("info", `[browser] \u6253\u5F00\u8BFB\u53D6\u7A97\u53E3\uFF1A${p.name} partition=persist:clipin-${p.id} \u6863\u4F4D=${_prof.name} hasCookie=${hasCookie}`);
     this.webview = makeWebviewEl(contentEl, `persist:clipin-${p.id}`, p.capabilities && p.capabilities.loginUrl || "about:blank", "clipin-webview", _prof);
     attachWebviewGuards(this.webview, this.plugin, "browser");
