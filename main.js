@@ -5466,6 +5466,20 @@ function makeWebviewEl(contentEl, partitionId, src, cls, opts) {
   if (cls) wv.setAttribute("class", cls);
   wv.setAttribute("src", src || "about:blank");
   box.appendChild(wv);
+  try {
+    const wc = wv.getWebContents && wv.getWebContents();
+    if (wc && wc.session && wc.session.webRequest) {
+      wc.session.webRequest.onBeforeRequest((details, cb) => {
+        const u = String(details.url || "");
+        if (/\.(m3u8|mp4|webm|m4v|ts|m4s)(\?|$)/i.test(u) || /xhscdn.*\/stream\//i.test(u) || /sns-video-/i.test(u)) {
+          cb({ cancel: true });
+        } else {
+          cb({ cancel: false });
+        }
+      });
+    }
+  } catch (_) {
+  }
   return wv;
 }
 function webviewCanAccessWebContents(wv) {
@@ -5505,13 +5519,10 @@ function attachWebviewGuards(wv, plugin, tag) {
           if (document.getElementById('savault-no-video')) return 'already';
           var st = document.createElement('style');
           st.id = 'savault-no-video';
-          st.textContent = 'video{display:none!important}';
-          document.head.appendChild(st);
-          var obs = new MutationObserver(function(){
-            var vs = document.querySelectorAll('video');
-            for (var i = 0; i < vs.length; i++) { vs[i].autoplay = false; try { vs[i].pause(); } catch(e){} }
-          });
-          obs.observe(document.body, { childList: true, subtree: true });
+          // \u5173\u952E\uFF1A\u8FDE video \u5BB9\u5668\u4E00\u8D77\u9690\u85CF\u2014\u2014\u5C0F\u7EA2\u4E66 explore \u7684\u5361\u7247
+          // \u6574\u4E2A .note-item \u91CC\u90FD\u6709 video/canvas\uFF0C\u53CC\u7BA1\u9F50\u4E0B
+          st.textContent = 'video,canvas,.player,.video-container{display:none!important}';
+          (document.head || document.documentElement).appendChild(st);
           return 'ok';
         } catch(e) { return 'err:' + e.message; }
       })();`).catch(() => {
@@ -6433,18 +6444,26 @@ var ClipinPlugin = class extends Plugin {
         new Notice("\u7B2C\u4E00\u6B21\u540C\u6B65\u524D\uFF0C\u5148\u9009\u62E9\u8981\u540C\u6B65\u54EA\u4E9B\u4E13\u8F91", 4e3);
         await this.promptChooseCollections(platformId);
         if (!(cfg.collections || []).length && !cfg.collectionsConfirmed) {
-          new Notice("\u6CA1\u6709\u786E\u8BA4\u540C\u6B65\u8303\u56F4\uFF0C\u5DF2\u53D6\u6D88\u672C\u6B21\u540C\u6B65\u3002\u53EF\u5728\u8BBE\u7F6E\u9875 \u2192 \u300C\u91CD\u65B0\u9009\u62E9\u4E13\u8F91\u300D\u91CC\u518D\u914D");
+          new Notice("\u5DF2\u53D6\u6D88\u540C\u6B65\uFF1A\u8FD8\u6CA1\u8BBE\u7F6E\u8981\u540C\u6B65\u7684\u4E13\u8F91\u8303\u56F4\u3002\u53BB\u8BBE\u7F6E\u9875 \u2192 \u300C\u91CD\u65B0\u9009\u62E9\u4E13\u8F91\u300D\u91CC\u9009\u4E00\u4E0B\uFF08\u4F60\u60F3\u540C\u6B65\u5168\u90E8\u6536\u85CF\u4E5F\u53EF\u4EE5\uFF09", 6e3);
+          if (this.settingTab) this.settingTab.display();
           return;
         }
       }
       let browserModal = null;
+      const hasCookie = !!(cfg.auth && cfg.auth.cookie);
+      if (needHost && !hasCookie) {
+        new Notice(`${p.name} \u8FD8\u6CA1\u767B\u5F55\uFF0C\u8BF7\u5148\u5728\u8BBE\u7F6E\u9875 \u2192 \u300C\u767B\u5F55 ${p.name}\u300D`, 6e3);
+        this._log("error", `[${p.name}] \u540C\u6B65\u4E2D\u6B62\uFF1A\u672A\u767B\u5F55`);
+        if (this.settingTab) this.settingTab.display();
+        return;
+      }
       const host = needHost ? await this.openBrowser(p, cfg.auth && cfg.auth.cookie, {
         onOpened: (m) => {
           browserModal = m;
         }
       }) : void 0;
       if (needHost && !host) {
-        new Notice("\u5DF2\u53D6\u6D88\u540C\u6B65\uFF08\u6D4F\u89C8\u5668\u7A97\u53E3\u5DF2\u5173\u95ED\uFF09");
+        new Notice(`${p.name} \u540C\u6B65\u5DF2\u53D6\u6D88\uFF08\u6D4F\u89C8\u5668\u7A97\u53E3\u5DF2\u5173\u95ED\uFF09`);
         return;
       }
       const result = await core.sync({
