@@ -638,10 +638,12 @@ var require_render = __commonJS({
         parts.push("");
       }
       const footer = [];
-      if (item.url) footer.push(`[\u5728 ${meta.name} \u6253\u5F00](${item.url})`);
       parts.push("---");
       parts.push("");
-      parts.push(footer.join(" \uFF5C "));
+      if (footer.length) {
+        parts.push(footer.join(" \uFF5C "));
+        parts.push("");
+      }
       if (o.linkAuthor !== false && item.author.name) {
         parts.push("");
         parts.push(`#${item.platform} [[${item.author.name}]]`);
@@ -2944,9 +2946,14 @@ var require_webview_host = __commonJS({
         async goto(url, opts) {
           const o = opts || {};
           onStatus("\u6B63\u5728\u6253\u5F00\u9875\u9762\u2026");
-          webview.src = url;
-          if (webview.loadURL) webview.loadURL(url).catch(() => {
-          });
+          if (webview.loadURL) {
+            try {
+              await webview.loadURL(url);
+            } catch (_) {
+            }
+          } else {
+            webview.src = url;
+          }
           await waitDomReady(o.timeoutMs || 45e3);
         },
         /** 重新注入拦截器（页面跳转后调用） */
@@ -3027,6 +3034,22 @@ var require_webview_host = __commonJS({
           const onDomReady = async () => {
             await sleep(300);
             await inject(pattern);
+            try {
+              await webview.executeJavaScript(`(function(){
+            try {
+              var vs = document.querySelectorAll('video');
+              for (var i = 0; i < vs.length; i++) {
+                vs[i].autoplay = false;
+                try { vs[i].pause(); } catch(e) {}
+              }
+              var st = document.createElement('style');
+              st.textContent = 'video{pointer-events:auto}';
+              document.head.appendChild(st);
+              return vs.length;
+            } catch(e) { return -1; }
+          })();`);
+            } catch (_) {
+            }
           };
           webview.addEventListener("dom-ready", onDomReady);
           try {
@@ -6917,12 +6940,19 @@ var ClipinSettingTab = class extends PluginSettingTab {
             new Notice("\u5DF2\u6E05\u7A7A\u8303\u56F4\uFF1A\u5C06\u540C\u6B65\u5168\u90E8\u6536\u85CF");
           }));
         }
-        new Setting(containerEl).setName("\u3000\u7ACB\u5373\u540C\u6B65").setDesc(`\u628A ${p.name} \u7684\u6536\u85CF\u540C\u6B65\u5230${s.target.type === "notion" ? " Notion" : " Obsidian"}`).addButton((b) => b.setButtonText("\u540C\u6B65").onClick(async () => {
+        new Setting(containerEl).setName("\u3000\u7ACB\u5373\u540C\u6B65").setDesc(`\u628A ${p.name} \u7684\u6536\u85CF\u540C\u6B65\u5230${s.target.type === "notion" ? " Notion" : " Obsidian"}\uFF08\u5F39\u7A97\u9009\uFF1A\u4EC5\u65B0\u589E / \u91CD\u65B0\u540C\u6B65\uFF09`).addButton((b) => b.setButtonText("\u4EC5\u540C\u6B65\u65B0\u589E").onClick(async () => {
           b.setButtonText("\u540C\u6B65\u4E2D\u2026").setDisabled(true);
           try {
-            await plugin.syncOne(id);
+            await plugin.syncOne(id, { mode: "new" });
           } finally {
-            b.setButtonText("\u540C\u6B65").setDisabled(false);
+            b.setButtonText("\u4EC5\u540C\u6B65\u65B0\u589E").setDisabled(false);
+          }
+        })).addButton((b) => b.setButtonText("\u91CD\u65B0\u540C\u6B65\uFF08\u8865\u8F6C\u5199/\u603B\u7ED3\uFF09").onClick(async () => {
+          b.setButtonText("\u540C\u6B65\u4E2D\u2026").setDisabled(true);
+          try {
+            await plugin.syncOne(id, { mode: "update" });
+          } finally {
+            b.setButtonText("\u91CD\u65B0\u540C\u6B65\uFF08\u8865\u8F6C\u5199/\u603B\u7ED3\uFF09").setDisabled(false);
           }
         }));
       }
