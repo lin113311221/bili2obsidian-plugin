@@ -835,6 +835,12 @@ var require_engine = __commonJS({
             logger: log,
             onTokenRefresh: o.onTokenRefresh
           });
+          if (typeof o.onCollected === "function") {
+            try {
+              await o.onCollected();
+            } catch (_) {
+            }
+          }
         } catch (e) {
           result.errors.push(`\u300C${col.title}\u300D\u62C9\u53D6\u5931\u8D25\uFF1A${e.message}`);
           continue;
@@ -1245,6 +1251,7 @@ var require_xiaohongshu = __commonJS({
       return base + Math.floor(Math.random() * (spread + 1));
     }
     var WEB = "https://www.xiaohongshu.com";
+    var MAC_UA2 = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
     var COLLECT_API_PATTERN = "/api/sns/web/v2/note/collect/page";
     function parseCount(v) {
       if (v == null || v === "") return 0;
@@ -1354,52 +1361,80 @@ var require_xiaohongshu = __commonJS({
         return albums.map((a) => ({ id: a.title, title: a.title, count: a.count || 0 }));
       },
       /**
-       * 详情补齐（v0.5.30 重写守卫）。
+       * 详情补齐（v0.5.32 重写为纯 HTTP——真实走通验证过的通路）。
        *
-       * v0.5.28 的教训：守卫用 item.raw.video 判断"是不是视频笔记"——但专辑/列表
-       * 接口的卡片**只有 type:"video" 标记，video 对象（含视频流地址）只在详情页
-       * 的 feed 接口里**。守卫恒 false → 34 条全部静默 return → 0 转写 0 总结，
-       * 且日志一行没有（真机 2026-09-04 02:00 同步 2 秒跑完 34 条的现场）。
+       * v0.5.31 的教训：fetchDetail 用 webview 逐条跳详情页 → ①窗口必须全程开着
+       * （竞品不是这样的，用户直接指出）②详情页自动播放视频 → Windows GPU 解码
+       * 崩溃（0x80000003，两次真机闪退实锤）③34 条 = 34 次导航，慢且危险。
        *
-       * v0.5.30 守卫：type === 'video'（卡片必带）或缺正文（图文的 desc 也在详情页）。
-       * 即：视频笔记补视频流+正文，图文笔记补正文——两类都值得去一趟详情页。
+       * 真实通路（2026-09-04 拿真实 cookie + 笔记 token 逐步验证）：
+       * GET /explore/{id}?xsec_token=… 的 HTML 里 __INITIAL_STATE__.note.noteDetailMap
+       * 自带完整数据：desc 正文、user（nickname/userId）、type、video.media.stream——
+       * 视频流编码键是 EF4/EF5（不是 h264/h265！），masterUrl 直接可用。
+       * HTML 页面不做签名校验，带 cookie 就能拿。
        *
-       * @returns {Promise<{content?, videoUrl?, media?, error?}>}
+       * @returns {Promise<{content?, videoUrl?, media?, author?, error?}>}
        */
-      async fetchDetail({ webviewHost, item, logger }) {
+      async fetchDetail({ http, auth, item, logger }) {
         const log = logger || (() => {
         });
-        if (!webviewHost) return {};
-        const raw = item.raw || {};
-        const isVideo = raw.type === "video" || raw.video && Object.keys(raw.video).length > 0;
-        const needBody = !item.content || !String(item.content).trim();
-        if (!isVideo && !needBody) return {};
-        log(`[xhs] \u8BE6\u60C5\u8865\u9F50 ${item.id}${isVideo ? "\uFF08\u89C6\u9891\uFF09" : "\uFF08\u8865\u6B63\u6587\uFF09"}`);
-        const bodies = await webviewHost.captureResponses({
-          urlPattern: "/api/sns/web/v1/feed",
-          async navigate() {
-            await webviewHost.goto(item.url, { waitUntil: "dom-ready", timeoutMs: 3e4 });
-          },
-          async drive() {
-            await webviewHost.sleep(2800);
+        if (!item || !item.url) return {};
+        const headers = {
+          "User-Agent": MAC_UA2,
+          "Accept": "text/html,application/xhtml+xml",
+          "Referer": WEB + "/"
+        };
+        if (auth && auth.cookie) headers["Cookie"] = auth.cookie;
+        try {
+          const res = await (http.request ? http.request(item.url, { method: "GET", headers }) : http.fetch(item.url, { method: "GET", headers }));
+          const html = res && res.text || "";
+          if (!html || html.length < 2e4) return { error: "\u8BE6\u60C5\u9875\u8FD4\u56DE\u5F02\u5E38\uFF08\u957F\u5EA6 " + html.length + "\uFF09" };
+          const m = html.match(/window\.__INITIAL_STATE__=(\{[\s\S]+?\})<\/script>/);
+          if (!m) return { error: "\u8BE6\u60C5\u9875\u6CA1\u6709 __INITIAL_STATE__\uFF08\u9875\u9762\u6539\u7248\u6216\u98CE\u63A7\u9875\uFF09" };
+          let note = null;
+          try {
+            const st = JSON.parse(m[1].replace(/:undefined/g, ":null").replace(/new Map\(\[[^\]]*\]\)/g, "[]"));
+            const ndm = st.note && st.note.noteDetailMap || {};
+            for (const k of Object.keys(ndm)) {
+              const n = ndm[k] && ndm[k].note;
+              if (n && (n.noteId === item.id || n.note_id === item.id || k === item.id)) {
+                note = n;
+                break;
+              }
+            }
+          } catch (_) {
           }
-        });
-        for (const body of bodies || []) {
-          const items = body && body.data && body.data.items || [];
-          for (const it of items) {
-            const n = it && it.noteCard;
-            if (!n) continue;
-            if ((n.noteId || n.note_id || item.id) !== item.id) continue;
-            const videoUrl = isVideo ? pickVideoUrl(n) : "";
-            log(`[xhs] \u8BE6\u60C5\u547D\u4E2D ${item.id}\uFF1Adesc=${(n.desc || "").length}\u5B57 videoUrl=${videoUrl ? "\u6709" : isVideo ? "\u65E0" : "\u2014"}`);
-            const out = { content: n.desc || item.content, media: pickImages(n) };
-            if (videoUrl) out.videoUrl = videoUrl;
-            if (isVideo && !videoUrl) out.error = "\u8BE6\u60C5\u63A5\u53E3\u6CA1\u7ED9\u89C6\u9891\u6D41\u5730\u5740";
-            return out;
+          if (!note) {
+            const dm = html.match(/"desc":"((?:[^"\\]|\\.){15,4000})"/);
+            if (dm) {
+              try {
+                note = { desc: JSON.parse('"' + dm[1] + '"') };
+              } catch (_) {
+              }
+            }
           }
+          if (!note) return { error: "\u8BE6\u60C5\u6570\u636E\u91CC\u6CA1\u627E\u5230\u5F53\u524D\u7B14\u8BB0" };
+          const out = { content: note.desc || item.content };
+          const v = note.video;
+          if (v) {
+            const stream = v.media && v.media.stream || v.stream || {};
+            for (const q of ["EF4", "EF5", "h264", "h265"]) {
+              const arr = stream[q];
+              if (!Array.isArray(arr) || !arr.length) continue;
+              const s = arr[0];
+              const u = s && (s.masterUrl || s.master_url || Array.isArray(s.backupUrls || s.backup_urls) && (s.backupUrls || s.backup_urls)[0] || s.url);
+              if (u) {
+                out.videoUrl = u;
+                break;
+              }
+            }
+            if (!out.videoUrl) out.error = "\u89C6\u9891\u6D41\u91CC\u6CA1\u6709\u53EF\u7528\u5730\u5740";
+          }
+          log(`[xhs] \u8BE6\u60C5\u8865\u9F50 ${item.id}\uFF1Adesc=${(note.desc || "").length}\u5B57 videoUrl=${out.videoUrl ? "\u6709" : v ? "\u65E0" : "\u2014"}`);
+          return out;
+        } catch (e) {
+          return { error: "\u8BE6\u60C5\u8BF7\u6C42\u5931\u8D25\uFF1A" + (e && e.message) };
         }
-        log(`[xhs] \u8BE6\u60C5\u672A\u547D\u4E2D ${item.id}\uFF08\u62E6\u5230 ${bodies ? bodies.length : 0} \u4E2A\u54CD\u5E94\uFF09`);
-        return { error: "\u8BE6\u60C5\u9875\u6CA1\u62E6\u5230\u5F53\u524D\u7B14\u8BB0\u7684 feed \u54CD\u5E94" };
       },
       /** 校验登录：webview 模式下以页面能否拿到用户信息为准 */
       async validate({ auth, http, webviewHost }) {
@@ -6262,7 +6297,12 @@ var ClipinPlugin = class extends Plugin {
           return;
         }
       }
-      const host = needHost ? await this.openBrowser(p, cfg.auth && cfg.auth.cookie) : void 0;
+      let browserModal = null;
+      const host = needHost ? await this.openBrowser(p, cfg.auth && cfg.auth.cookie, {
+        onOpened: (m) => {
+          browserModal = m;
+        }
+      }) : void 0;
       if (needHost && !host) {
         new Notice("\u5DF2\u53D6\u6D88\u540C\u6B65\uFF08\u6D4F\u89C8\u5668\u7A97\u53E3\u5DF2\u5173\u95ED\uFF09");
         return;
@@ -6289,6 +6329,17 @@ var ClipinPlugin = class extends Plugin {
           linkAuthor: this.settings.target.obsidian.linkAuthor
         },
         webviewHost: host,
+        // v0.5.32：采集完成即关窗（富化阶段纯 HTTP，不需要页面在场）
+        onCollected: () => {
+          if (browserModal) {
+            try {
+              browserModal.close();
+            } catch (_) {
+            }
+            browserModal = null;
+            this._log("info", "[browser] \u6570\u636E\u91C7\u96C6\u5B8C\u6210\uFF0C\u7A97\u53E3\u5DF2\u81EA\u52A8\u5173\u95ED\uFF08\u540E\u7EED\u8F6C\u5199/\u603B\u7ED3\u4E0D\u9700\u8981\u5B83\uFF09");
+          }
+        },
         onProgress: (s) => {
           if (s && s.message) new Notice(s.message, 2e3);
         },
@@ -7027,18 +7078,6 @@ var ClipinSettingTab = class extends PluginSettingTab {
       await plugin.saveSettings();
     }));
     containerEl.createEl("h2", { text: "\u6545\u969C\u6392\u67E5" });
-    new Setting(containerEl).setName("\u5185\u5D4C\u6D4F\u89C8\u5668\u517C\u5BB9\u6863\u4F4D").setDesc("\u6253\u5F00\u767B\u5F55/\u540C\u6B65\u7A97\u53E3\u5C31\u95EA\u9000\u65F6\uFF0C\u5207\u6362\u66F4\u4FDD\u5B88\u7684\u5185\u5D4C\u6D4F\u89C8\u5668\u914D\u7F6E\u3002\u540C\u4E00\u7248\u672C\u5185\u6BCF\u5D29\u4E00\u6B21\u4F1A\u81EA\u52A8\u964D\u4E00\u6863\uFF1B\u63D2\u4EF6\u66F4\u65B0\u540E\u81EA\u52A8\u56DE\u9ED8\u8BA4\u6863\u91CD\u65B0\u9A8C\u8BC1\uFF08\u4EE3\u7801\u53D8\u4E86\uFF0C\u53EF\u80FD\u5C31\u4FEE\u597D\u4E86\uFF09\u3002\u624B\u52A8\u9009\u62E9\u4E0D\u53D7\u6B64\u9650").addDropdown((d) => {
-      for (let i = 0; i < WEBVIEW_PROFILES.length; i++) {
-        d.addOption(String(i), `${WEBVIEW_PROFILES[i].name}${i === DEFAULT_WEBVIEW_PROFILE ? "\uFF08\u9ED8\u8BA4\uFF09" : ""}`);
-      }
-      d.setValue(String(plugin.settings.webviewProfile));
-      d.onChange(async (v) => {
-        plugin.settings.webviewProfile = parseInt(v, 10);
-        plugin.settings.webviewProfileCrashedAt = "";
-        await plugin.saveSettings();
-        new Notice(`\u5DF2\u5207\u6362\u5230 ${webviewProfile(plugin.settings.webviewProfile).name}`);
-      });
-    });
     new Setting(containerEl).setName("\u91CD\u7F6E\u5185\u5D4C\u6D4F\u89C8\u5668\u6570\u636E").setDesc("\u70B9\u300C\u767B\u5F55\u300D/\u5F00\u540C\u6B65\u7A97\u53E3\u5C31\u95EA\u9000\u65F6\u7528\uFF1A\u6E05\u6389\u5185\u5D4C\u6D4F\u89C8\u5668\u7684\u7F13\u5B58\u4E0E\u767B\u5F55\u6001\uFF08\u65E7\u6570\u636E\u6539\u540D\u7559\u5E95\u4E0D\u5220\u9664\uFF09\uFF0C\u7136\u540E\u4ECE\u5E72\u51C0\u72B6\u6001\u91CD\u5EFA\u3002\u9700\u5148\u5173\u95ED\u6240\u6709\u540C\u6B65/\u767B\u5F55\u7A97\u53E3").addButton((b) => b.setButtonText("\u7ACB\u5373\u91CD\u7F6E").setWarning().onClick(() => {
       const moved = plugin._quarantinePartitions("\u624B\u52A8\u91CD\u7F6E");
       new Notice(moved.length ? `\u5DF2\u91CD\u7F6E\uFF08${moved.join(", ")}\uFF09\u3002\u4E0B\u6B21\u6253\u5F00\u767B\u5F55/\u540C\u6B65\u7A97\u53E3\u5C06\u4ECE\u5E72\u51C0\u72B6\u6001\u5F00\u59CB\uFF0C\u9700\u91CD\u65B0\u767B\u5F55\u4E00\u6B21` : "\u6CA1\u6709\u53EF\u91CD\u7F6E\u7684\u6D4F\u89C8\u5668\u6570\u636E\uFF08\u6216\u6587\u4EF6\u6B63\u88AB\u5360\u7528\u2014\u2014\u8BF7\u5148\u5173\u95ED\u6240\u6709\u767B\u5F55/\u540C\u6B65\u7A97\u53E3\u518D\u8BD5\uFF09");
