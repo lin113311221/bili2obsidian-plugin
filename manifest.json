@@ -1,7 +1,7 @@
 {
   "id": "savault",
   "name": "知识桥梁 Savault",
-  "version": "0.5.35",
+  "version": "0.5.36",
   "minAppVersion": "1.4.0",
   "description": "把小红书 / B站 的收藏，同步到 Obsidian 或 Notion",
   "author": "aiprice",

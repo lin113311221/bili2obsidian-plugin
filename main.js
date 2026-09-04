@@ -3174,16 +3174,18 @@ var require_webview_host = __commonJS({
             try {
               await webview.executeJavaScript(`(function(){
             try {
-              var vs = document.querySelectorAll('video');
-              for (var i = 0; i < vs.length; i++) {
-                vs[i].autoplay = false;
-                try { vs[i].pause(); } catch(e) {}
-              }
+              if (document.getElementById('savault-no-video')) return 'already';
               var st = document.createElement('style');
-              st.textContent = 'video{pointer-events:auto}';
+              st.id = 'savault-no-video';
+              st.textContent = 'video{display:none!important}';
               document.head.appendChild(st);
-              return vs.length;
-            } catch(e) { return -1; }
+              var obs = new MutationObserver(function(){
+                var vs = document.querySelectorAll('video');
+                for (var i = 0; i < vs.length; i++) { vs[i].autoplay = false; try { vs[i].pause(); } catch(e){} }
+              });
+              obs.observe(document.body, { childList: true, subtree: true });
+              return 'ok';
+            } catch(e) { return 'err:' + e.message; }
           })();`);
             } catch (_) {
             }
@@ -5500,10 +5502,18 @@ function attachWebviewGuards(wv, plugin, tag) {
     try {
       wv.executeJavaScript(`(function(){
         try {
-          var vs = document.querySelectorAll('video');
-          for (var i = 0; i < vs.length; i++) { vs[i].autoplay = false; try { vs[i].pause(); } catch(e){} }
-          return vs.length;
-        } catch(e) { return -1; }
+          if (document.getElementById('savault-no-video')) return 'already';
+          var st = document.createElement('style');
+          st.id = 'savault-no-video';
+          st.textContent = 'video{display:none!important}';
+          document.head.appendChild(st);
+          var obs = new MutationObserver(function(){
+            var vs = document.querySelectorAll('video');
+            for (var i = 0; i < vs.length; i++) { vs[i].autoplay = false; try { vs[i].pause(); } catch(e){} }
+          });
+          obs.observe(document.body, { childList: true, subtree: true });
+          return 'ok';
+        } catch(e) { return 'err:' + e.message; }
       })();`).catch(() => {
       });
     } catch (_) {
