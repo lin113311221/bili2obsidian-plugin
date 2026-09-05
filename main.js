@@ -5490,6 +5490,9 @@ var DEFAULT_SETTINGS = {
   // v0.5.49：评论采集开关（v0.5.34 的接线，回退时丢了，补回）
   commentsOptIn: false,
   // v0.5.63：评论采集风险确认——必须用户在设置页手动打开开关才置 true
+  // v0.5.66：免打扰采集——登录态有效时**不弹窗口**，开一个离屏 webview 取数。
+  // 取不到（登录态掉了 / 站点改版）再自动弹窗口让用户登录。默认开（!== false）
+  silentCollect: true,
   autoSync: false,
   syncIntervalMin: 60
 };
@@ -5678,6 +5681,26 @@ function makeWebviewEl(contentEl, partitionId, src, cls, opts) {
   wv.setAttribute("src", src || "about:blank");
   box.appendChild(wv);
   return wv;
+}
+function isEmptySyncResult(r) {
+  if (!r || r.quotaHit) return false;
+  if (r.failed === -1) return true;
+  return (r.created || 0) + (r.skipped || 0) === 0;
+}
+function makeHiddenHostEl() {
+  const box = document.createElement("div");
+  box.className = "clipin-hidden-host";
+  box.setAttribute("style", "position:fixed;left:-20000px;top:0;width:1280px;height:900px;overflow:hidden;pointer-events:none;");
+  if (typeof box.createDiv !== "function") {
+    box.createDiv = function(o) {
+      const d = document.createElement("div");
+      if (o && o.cls) d.className = o.cls;
+      this.appendChild(d);
+      return d;
+    };
+  }
+  document.body.appendChild(box);
+  return box;
 }
 function webviewCanAccessWebContents(wv) {
   return !!(wv && typeof wv.getWebContents === "function");
@@ -6554,8 +6577,9 @@ var ClipinPlugin = class extends Plugin {
       new Notice(this._syncPaused ? "\u5DF2\u6682\u505C\uFF08\u5F53\u524D\u8FD9\u6761\u4F1A\u8DD1\u5B8C\uFF09" : "\u7EE7\u7EED\u540C\u6B65");
     });
     this._log("info", `\u5F00\u59CB\u540C\u6B65 ${p.name}\uFF08${platformId}\uFF09\u5165\u53E3=${o.source || "ribbon/\u547D\u4EE4"}`);
+    let hiddenHost = null;
     try {
-      new Notice(`\u5F00\u59CB\u540C\u6B65 ${p.name}\u2026\uFF08\u5982\u5F39\u51FA\u6D4F\u89C8\u5668\u7A97\u53E3\uFF0C\u767B\u5F55\u540E\u70B9\u300C\u5F00\u59CB\u8BFB\u53D6\u300D\uFF09`);
+      new Notice(`\u5F00\u59CB\u540C\u6B65 ${p.name}\u2026\uFF08\u540E\u53F0\u8BFB\u53D6\u4E2D\uFF0C\u9700\u8981\u767B\u5F55\u65F6\u624D\u4F1A\u5F39\u7A97\uFF09`);
       const isPro = !!this.settings.licenseValid;
       let mode = o.mode;
       if (!mode && o.askMode) {
@@ -6576,17 +6600,40 @@ var ClipinPlugin = class extends Plugin {
         }
       }
       let browserModal = null;
-      const host = needHost ? await this.openBrowser(p, cfg.auth && cfg.auth.cookie, {
-        onOpened: (m) => {
-          browserModal = m;
+      if (needHost && this.settings.silentCollect !== false) {
+        let loginOk = false;
+        try {
+          const ar = await p.validate({ auth: cfg.auth, http: this.http });
+          loginOk = !!(ar && ar.ok);
+          if (!loginOk) this._log("info", `[browser] \u767B\u5F55\u6001\u6821\u9A8C\u672A\u901A\u8FC7\uFF08${ar && ar.message || "\u672A\u77E5\u539F\u56E0"}\uFF09\u2192 \u9700\u8981\u6253\u5F00\u7A97\u53E3`);
+        } catch (e) {
+          this._log("warn", `[browser] \u767B\u5F55\u6001\u6821\u9A8C\u62A5\u9519\uFF1A${e && e.message || e} \u2192 \u9700\u8981\u6253\u5F00\u7A97\u53E3`);
         }
-      }) : void 0;
-      if (needHost && !host) {
-        new Notice("\u5DF2\u53D6\u6D88\u540C\u6B65\uFF08\u6D4F\u89C8\u5668\u7A97\u53E3\u5DF2\u5173\u95ED\uFF09");
-        return;
+        if (loginOk) {
+          hiddenHost = await this._openHiddenWebview(p);
+          if (hiddenHost) this._log("info", "[browser] \u767B\u5F55\u6001\u6709\u6548 \u2192 \u514D\u6253\u6270\u91C7\u96C6\uFF08\u4E0D\u5F39\u7A97\u53E3\uFF09");
+        }
       }
-      if (needHost) await this._refreshAuthFromPartition(platformId);
-      const result = await core.sync({
+      const openVisible = async () => {
+        const h = await this.openBrowser(p, cfg.auth && cfg.auth.cookie, {
+          onOpened: (m) => {
+            browserModal = m;
+          }
+        });
+        if (h) {
+          await this._refreshAuthFromPartition(platformId);
+        }
+        return h;
+      };
+      let host = hiddenHost ? hiddenHost.host : void 0;
+      if (needHost && !host) {
+        host = await openVisible();
+        if (!host) {
+          new Notice("\u5DF2\u53D6\u6D88\u540C\u6B65\uFF08\u6D4F\u89C8\u5668\u7A97\u53E3\u5DF2\u5173\u95ED\uFF09");
+          return;
+        }
+      }
+      const runCoreSync = (h) => core.sync({
         provider: p,
         target: this.buildTarget(),
         http: this.http,
@@ -6625,6 +6672,13 @@ var ClipinPlugin = class extends Plugin {
             }
             browserModal = null;
             this._log("info", "[browser] \u6570\u636E\u91C7\u96C6\u5B8C\u6210\uFF0C\u7A97\u53E3\u5DF2\u81EA\u52A8\u5173\u95ED\uFF08\u540E\u7EED\u8F6C\u5199/\u603B\u7ED3\u4E0D\u9700\u8981\u5B83\uFF09");
+          } else if (hiddenHost) {
+            try {
+              hiddenHost.destroy();
+            } catch (_) {
+            }
+            hiddenHost = null;
+            this._log("info", "[browser] \u6570\u636E\u91C7\u96C6\u5B8C\u6210\uFF0C\u79BB\u5C4F\u9875\u9762\u5DF2\u9500\u6BC1\uFF08\u514D\u6253\u6270\uFF0C\u5168\u7A0B\u6CA1\u5F39\u8FC7\u7A97\u53E3\uFF09");
           }
         },
         onProgress: (s) => {
@@ -6639,6 +6693,22 @@ var ClipinPlugin = class extends Plugin {
           this._log("info", "\u5DF2\u56DE\u5199\u8F6E\u6362\u540E\u7684 refresh_token");
         }
       });
+      let result = await runCoreSync(host);
+      if (needHost && hiddenHost && isEmptySyncResult(result)) {
+        this._log("warn", `[browser] \u514D\u6253\u6270\u91C7\u96C6\u6CA1\u62FF\u5230\u6570\u636E\uFF08created=${result && result.created} skipped=${result && result.skipped} failed=${result && result.failed}\uFF09\u2192 \u6253\u5F00\u7A97\u53E3`);
+        try {
+          hiddenHost.destroy();
+        } catch (_) {
+        }
+        hiddenHost = null;
+        new Notice("\u540E\u53F0\u8BFB\u53D6\u6CA1\u62FF\u5230\u6570\u636E\uFF0C\u5DF2\u6253\u5F00\u7A97\u53E3\uFF1A\u767B\u5F55\u540E\u70B9\u300C\u5F00\u59CB\u8BFB\u53D6\u300D", 6e3);
+        host = await openVisible();
+        if (!host) {
+          new Notice("\u5DF2\u53D6\u6D88\u540C\u6B65\uFF08\u6D4F\u89C8\u5668\u7A97\u53E3\u5DF2\u5173\u95ED\uFF09");
+          return;
+        }
+        result = await runCoreSync(host);
+      }
       this._log("info", `[${p.name}] \u540C\u6B65\u7ED3\u675F created=${result.created} skipped=${result.skipped} failed=${result.failed} quotaHit=${result.quotaHit} aborted=${result.aborted}`);
       for (const err of result.errors || []) this._log("error", `[${p.name}] ${err}`);
       this.settings.syncedCount = (this.settings.syncedCount || 0) + Math.max(0, result.created);
@@ -6654,6 +6724,13 @@ var ClipinPlugin = class extends Plugin {
       this._log("error", `[${p.name}] \u540C\u6B65\u5F02\u5E38\uFF1A${e && e.stack || e}`);
       new Notice("\u540C\u6B65\u5931\u8D25\uFF1A" + e.message);
     } finally {
+      if (hiddenHost) {
+        try {
+          hiddenHost.destroy();
+        } catch (_) {
+        }
+        hiddenHost = null;
+      }
       this._syncing = false;
       if (this._pauseBar) {
         try {
@@ -6754,6 +6831,81 @@ var ClipinPlugin = class extends Plugin {
       const modal = new BrowserModal(this.app, this, provider, resolve, authCookie, opts);
       modal.open();
       if (opts && typeof opts.onOpened === "function") opts.onOpened(modal);
+    });
+  }
+  /**
+   * 免打扰采集：开一个离屏 webview 取数，全程不弹窗口（v0.5.66）。
+   *
+   * 前提：调用方已用 provider.validate()（纯 HTTP）确认登录态有效。
+   * 起不来（webview 创建失败 / 首次导航超时）一律返回 null，由调用方回退到
+   * 可见的 BrowserModal —— 免打扰只是优化，不能让功能不可用。
+   *
+   * @returns {Promise<{host:Object, destroy:Function}|null>}
+   */
+  _openHiddenWebview(provider) {
+    return new Promise((resolve) => {
+      let box = null;
+      let wv = null;
+      let settled = false;
+      const finish = (v) => {
+        if (!settled) {
+          settled = true;
+          resolve(v);
+        }
+      };
+      const destroy = () => {
+        try {
+          if (wv && wv.parentNode) wv.parentNode.removeChild(wv);
+        } catch (_) {
+        }
+        try {
+          if (box && box.parentNode) box.parentNode.removeChild(box);
+        } catch (_) {
+        }
+        try {
+          if (wv && typeof wv.close === "function") wv.close();
+        } catch (_) {
+        }
+        wv = null;
+        box = null;
+      };
+      const fail = (why) => {
+        this._log("warn", `[browser] \u514D\u6253\u6270\u91C7\u96C6\u8D77\u4E0D\u6765\uFF1A${why}`);
+        try {
+          destroy();
+        } catch (_) {
+        }
+        finish(null);
+      };
+      try {
+        box = makeHiddenHostEl();
+        const _prof = webviewProfile();
+        wv = makeWebviewEl(
+          box,
+          `persist:clipin-${provider.id}`,
+          provider.capabilities && provider.capabilities.loginUrl || "about:blank",
+          "clipin-webview",
+          _prof
+        );
+      } catch (e) {
+        fail(`\u521B\u5EFA\u79BB\u5C4F webview \u5931\u8D25\uFF1A${e && e.message || e}`);
+        return;
+      }
+      const t = setTimeout(() => fail("\u9996\u6B21\u5BFC\u822A\u8D85\u65F6\uFF0830s\uFF09"), 3e4);
+      const onReady = () => {
+        clearTimeout(t);
+        wv.removeEventListener("dom-ready", onReady);
+        this._log("info", `[browser] \u79BB\u5C4F\u9875\u9762\u5C31\u7EEA partition=persist:clipin-${provider.id} \u6863\u4F4D=${webviewProfile().name}`);
+        finish({
+          host: createWebviewHost({
+            webview: wv,
+            onStatus: (s) => this._log("info", `[webview] ${s}`),
+            logger: (m) => this._log("info", m)
+          }),
+          destroy
+        });
+      };
+      wv.addEventListener("dom-ready", onReady);
     });
   }
   /** AI 接口探活 */
@@ -7391,6 +7543,10 @@ var ClipinSettingTab = class extends PluginSettingTab {
         await plugin.saveSettings();
       }));
     }
+    new Setting(containerEl).setName("\u514D\u6253\u6270\u91C7\u96C6\uFF08\u9ED8\u8BA4\u5F00\uFF09").setDesc("\u767B\u5F55\u6001\u6709\u6548\u65F6**\u4E0D\u518D\u5F39\u300C\u5F00\u59CB\u8BFB\u53D6\u300D\u7A97\u53E3**\u2014\u2014\u76F4\u63A5\u5728\u79BB\u5C4F\u9875\u9762\u91CC\u53D6\u6570\uFF0C\u540C\u6B65\u5B8C\u81EA\u52A8\u9500\u6BC1\u3002\u53EA\u6709\u767B\u5F55\u6001\u5931\u6548\u6216\u4E00\u6761\u90FD\u6CA1\u8BFB\u5230\u65F6\u624D\u4F1A\u5F39\u7A97\u8BA9\u4F60\u767B\u5F55\u3002\u5173\u6389\u5219\u56DE\u5230\u8001\u884C\u4E3A\uFF1A\u6BCF\u6B21\u540C\u6B65\u90FD\u5148\u5F39\u7A97\u53E3\u786E\u8BA4").addToggle((g) => g.setValue(s.silentCollect !== false).onChange(async (v) => {
+      s.silentCollect = v;
+      await plugin.saveSettings();
+    }));
     new Setting(containerEl).setName("AI \u603B\u7ED3").setDesc(pro ? "\u7528\u4F60\u81EA\u5DF1\u7684 key \u8C03\u7528\u6A21\u578B\uFF0C\u81EA\u52A8\u751F\u6210\u6838\u5FC3\u89C2\u70B9/\u8981\u70B9/\u91D1\u53E5" : "\u6C38\u4E45\u7248\u529F\u80FD").addToggle((g) => g.setValue(pro && s.ai.enabled).setDisabled(!pro).onChange(async (v) => {
       s.ai.enabled = v;
       await plugin.saveSettings();
