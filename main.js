@@ -1282,7 +1282,7 @@ var require_bilibili = __commonJS({
 var require_xiaohongshu = __commonJS({
   "core/providers/xiaohongshu.js"(exports2, module2) {
     var { makeItem, toISO } = require_model();
-    var COMMENTS_MAX_ITEMS = 3;
+    var COMMENTS_MAX_ITEMS = 0;
     function jitter(base, spread) {
       return base + Math.floor(Math.random() * (spread + 1));
     }
@@ -1632,52 +1632,65 @@ var require_xiaohongshu = __commonJS({
         if (fetchComments === true) {
           const commentBodies = [];
           let readOk = 0;
-          const commentPlan = Math.min(items.length, COMMENTS_MAX_ITEMS);
-          log(`[xhs] \u8BC4\u8BBA\u91C7\u96C6\uFF1A\u9650\u91CF\u8BD5\u8DD1\u524D ${commentPlan}/${items.length} \u6761\uFF08v0.5.63\u2014\u2014\u9A8C\u8BC1\u5355\u5C42\u7A97\u53E3\u4E0B\u6EDA\u8BE6\u60C5\u9875\u4F1A\u4E0D\u4F1A\u5D29\uFF09`);
+          const domToBody = (it, list) => ({
+            url: `https://www.xiaohongshu.com/dom?note_id=${it && it.id || ""}`,
+            body: {
+              data: {
+                comments: (list || []).map((c) => ({
+                  user_info: { nickname: c.author || "" },
+                  content: c.text || "",
+                  like_count: c.likes || 0
+                }))
+              }
+            }
+          });
+          const SCROLL_ONE = `(function(){
+        window.scrollBy(0, Math.round(window.innerHeight * 0.8));
+        var sc = document.querySelector('.note-scroller, .interaction-container, [class*="scroll"]');
+        if (sc) sc.scrollTop += 400;
+        return true;
+      })()`;
+          const commentPlan = COMMENTS_MAX_ITEMS > 0 ? Math.min(items.length, COMMENTS_MAX_ITEMS) : items.length;
+          log(`[xhs] \u8BC4\u8BBA\u91C7\u96C6\uFF1A${COMMENTS_MAX_ITEMS > 0 ? `\u9650\u91CF ${commentPlan}` : `\u5168\u91CF ${commentPlan}`}/${items.length} \u6761\uFF08v0.5.67\u2014\u2014\u6EDA\u52A8\u4E0D\u5D29\u5DF2\u9A8C\u8BC1\uFF0C\u9650\u91CF\u653E\u5F00\uFF09`);
           for (let i = 0; i < commentPlan; i++) {
             const it = items[i];
+            if (i > 0) await webviewHost.sleep(jitter(900, 1200));
             log(`[xhs] \u8BC4\u8BBA\u91C7\u96C6\uFF1A\u7B2C ${i + 1}/${commentPlan} \u6761 ${it.id || ""}`);
             try {
               await webviewHost.goto(it.url || "");
               const injRes = await webviewHost.reinject("/api/sns/web/");
               if (i === 0) log(`[xhs] \u8BC4\u8BBA\u8BCA\u65AD\uFF1A\u62E6\u622A\u5668\u8865\u88C5\u7ED3\u679C=${JSON.stringify(injRes)}`);
-              const deadline = Date.now() + 12e3;
+              let usedDom = false;
+              await webviewHost.eval(SCROLL_ONE);
+              await webviewHost.sleep(1500);
+              const quick = await readCommentsFromDom(webviewHost);
+              if (quick.items && quick.items.length) {
+                commentBodies.push(domToBody(it, quick.items));
+                readOk++;
+                usedDom = true;
+                if (i === 0) log(`[xhs] \u8BC4\u8BBA\u8BCA\u65AD\uFF1ADOM \u76F4\u8BFB\u547D\u4E2D ${quick.items.length} \u6761\uFF08\u5FEB\u8DEF\u5F84\uFF0C\u6CA1\u7B49\u63A5\u53E3\uFF09`);
+              }
               let got = [];
               let scrollStep = 0;
-              while (Date.now() < deadline) {
-                await webviewHost.eval(`(function(){
-              window.scrollBy(0, Math.round(window.innerHeight * 0.8));
-              // \u5F39\u5C42\u5F0F\u8BE6\u60C5\u9875\u6EDA\u52A8\u7684\u662F\u5185\u90E8\u5BB9\u5668\u2014\u2014\u628A\u53EF\u80FD\u7684\u6EDA\u52A8\u5BB9\u5668\u4E5F\u6EDA\u4E00\u4E0B
-              var sc = document.querySelector('.note-scroller, .interaction-container, [class*="scroll"]');
-              if (sc) sc.scrollTop += 400;
-              return true;
-            })()`);
-                scrollStep++;
-                await webviewHost.sleep(800);
-                const c = await webviewHost.getCaptured();
-                got = (c || []).filter((x) => x && x.url && x.url.includes("/comment/page"));
-                if (got.length) break;
+              if (!usedDom) {
+                const deadline = Date.now() + 12e3;
+                while (Date.now() < deadline) {
+                  await webviewHost.eval(SCROLL_ONE);
+                  scrollStep++;
+                  await webviewHost.sleep(800);
+                  const c = await webviewHost.getCaptured();
+                  got = (c || []).filter((x) => x && x.url && x.url.includes("/comment/page"));
+                  if (got.length) break;
+                }
+                if (i === 0) log(`[xhs] \u8BC4\u8BBA\u8BCA\u65AD\uFF1A\u6EDA\u52A8\u4E86 ${scrollStep} \u5C4F${got.length ? "\uFF0C\u547D\u4E2D\u8BC4\u8BBA" : "\uFF0C\u6CA1\u7B49\u5230\u8BC4\u8BBA\u8BF7\u6C42"}`);
               }
-              if (i === 0) log(`[xhs] \u8BC4\u8BBA\u8BCA\u65AD\uFF1A\u6EDA\u52A8\u4E86 ${scrollStep} \u5C4F${got.length ? "\uFF0C\u547D\u4E2D\u8BC4\u8BBA" : "\uFF0C\u6CA1\u7B49\u5230\u8BC4\u8BBA\u8BF7\u6C42"}`);
               if (got.length) {
                 commentBodies.push(...got);
                 readOk++;
-              } else {
+              } else if (!usedDom) {
                 const dom = await readCommentsFromDom(webviewHost);
                 if (dom.items && dom.items.length) {
-                  commentBodies.push({
-                    // 走一样的挂载逻辑：URL 里带 note_id 才能反查归属
-                    url: `https://www.xiaohongshu.com/dom?note_id=${it.id || ""}`,
-                    body: {
-                      data: {
-                        comments: dom.items.map((c) => ({
-                          user_info: { nickname: c.author || "" },
-                          content: c.text || "",
-                          like_count: c.likes || 0
-                        }))
-                      }
-                    }
-                  });
+                  commentBodies.push(domToBody(it, dom.items));
                   readOk++;
                 }
                 if (i === 0) {
@@ -7532,11 +7545,11 @@ var ClipinSettingTab = class extends PluginSettingTab {
       }).addButton((b) => b.setButtonText("\u83B7\u53D6 Key \u2197").onClick(() => {
         require("electron").shell.openExternal("https://bailian.console.aliyun.com/#/api-key");
       }));
-      new Setting(containerEl).setName("\u3000\u540C\u6B65\u8BC4\u8BBA\uFF08\u5B9E\u9A8C\xB7\u9ED8\u8BA4\u5173\uFF09").setDesc("\u8BFB\u6BCF\u6761\u7B14\u8BB0\u7684\u7F6E\u9876/\u70ED\u8BC4\u5230\u300C\u7CBE\u9009\u8BC4\u8BBA\u300D\u533A\u5757\u3002\u26A0\uFE0F \u8FD9\u6761\u94FE\u8DEF\u8981\u9010\u6761\u8DF3\u8FDB\u8BE6\u60C5\u9875\u5E76\u6EDA\u52A8\u9875\u9762\u89E6\u53D1\u8BC4\u8BBA\u52A0\u8F7D\uFF0C\u5386\u53F2\u4E0A\u628A\u6574\u4E2A Obsidian \u5E26\u5D29\u8FC7\uFF08Windows \u4E0A\u8FDB\u7A0B\u76F4\u63A5\u6D88\u5931\u3001\u65E5\u5FD7\u621B\u7136\u800C\u6B62\uFF09\u3002\u60F3\u8BD5\u8BF7\u4ECE\u5DE6\u4FA7\u300C\u526A\u5200\u300D\u6309\u94AE\u540C\u6B65\uFF08\u5355\u5C42\u7A97\u53E3\uFF09\uFF0C\u4E0D\u8981\u4ECE\u8BBE\u7F6E\u9875\u70B9\u540C\u6B65\uFF1B\u5D29\u4E86\u5C31\u91CD\u542F\u56DE\u6765\u5173\u6389\u5B83").addToggle((g) => g.setValue(!!s.fetchComments).onChange(async (v) => {
+      new Setting(containerEl).setName("\u3000\u540C\u6B65\u8BC4\u8BBA\uFF08\u9ED8\u8BA4\u5173\uFF09").setDesc("\u8BFB\u6BCF\u6761\u7B14\u8BB0\u7684\u7F6E\u9876/\u70ED\u8BC4\u5230\u300C\u7CBE\u9009\u8BC4\u8BBA\u300D\u533A\u5757\u3002v0.5.66 \u8D77**\u5DF2\u9A8C\u8BC1\u53EF\u7528**\uFF1A\u771F\u673A 3/3 \u6761\u8BFB\u5230\u8BC4\u8BBA\u3001\u8DF3\u8BE6\u60C5\u9875\u6EDA\u52A8\u5168\u7A0B\u4E0D\u5D29\u3002\u6253\u5F00\u5373\u5168\u91CF\u91C7\u96C6\uFF0835 \u6761\u5927\u7EA6\u591A\u82B1 2 \u5206\u949F\uFF0C\u6BCF\u6761\u4E4B\u95F4\u7559\u4E86\u968F\u673A\u95F4\u9694\uFF09\u3002\u8BC4\u8BBA\u662F\u968F\u8BE6\u60C5\u9875\u4E00\u8D77\u6E32\u67D3\u7684\uFF0C\u63D2\u4EF6\u76F4\u63A5\u4ECE\u9875\u9762\u8BFB\u53D6\uFF0C\u4E0D\u4F9D\u8D56\u63A5\u53E3").addToggle((g) => g.setValue(!!s.fetchComments).onChange(async (v) => {
         s.fetchComments = v;
         if (v) {
           s.commentsOptIn = true;
-          new Notice("\u8BC4\u8BBA\u91C7\u96C6\u5DF2\u5F00\u542F\uFF1A\u5EFA\u8BAE\u4ECE\u5DE6\u4FA7\u526A\u5200\u6309\u94AE\u540C\u6B65\uFF08\u5355\u5C42\u7A97\u53E3\uFF09\u3002\u82E5 Obsidian \u76F4\u63A5\u5D29\u6E83\uFF0C\u91CD\u542F\u540E\u56DE\u6765\u628A\u8FD9\u4E2A\u5F00\u5173\u5173\u6389\u5373\u53EF", 12e3);
+          new Notice("\u8BC4\u8BBA\u91C7\u96C6\u5DF2\u5F00\u542F\uFF1A\u4E0B\u6B21\u540C\u6B65\u4F1A\u9010\u6761\u8BFB\u8BC4\u8BBA\u533A\uFF0835 \u6761\u7EA6\u591A 2 \u5206\u949F\uFF09\u3002\u5185\u5BB9\u4E0D\u5BF9\u5C31\u628A sync.log \u53D1\u6211", 8e3);
         } else {
           s.commentsOptIn = false;
         }
