@@ -1620,14 +1620,24 @@ var require_xiaohongshu = __commonJS({
             const it = items[i];
             try {
               await webviewHost.eval(`(function(){ location.href = ${JSON.stringify(it.url || "")}; return true; })()`);
-              const deadline = Date.now() + 9e3;
+              const deadline = Date.now() + 12e3;
               let got = [];
+              let scrollStep = 0;
               while (Date.now() < deadline) {
+                await webviewHost.eval(`(function(){
+              window.scrollBy(0, Math.round(window.innerHeight * 0.8));
+              // \u5F39\u5C42\u5F0F\u8BE6\u60C5\u9875\u6EDA\u52A8\u7684\u662F\u5185\u90E8\u5BB9\u5668\u2014\u2014\u628A\u53EF\u80FD\u7684\u6EDA\u52A8\u5BB9\u5668\u4E5F\u6EDA\u4E00\u4E0B
+              var sc = document.querySelector('.note-scroller, .interaction-container, [class*="scroll"]');
+              if (sc) sc.scrollTop += 400;
+              return true;
+            })()`);
+                scrollStep++;
+                await webviewHost.sleep(800);
                 const c = await webviewHost.getCaptured();
                 got = (c || []).filter((x) => x && x.url && x.url.includes("/comment/page"));
                 if (got.length) break;
-                await webviewHost.sleep(400);
               }
+              if (i === 0) log(`[xhs] \u8BC4\u8BBA\u8BCA\u65AD\uFF1A\u6EDA\u52A8\u4E86 ${scrollStep} \u5C4F${got.length ? "\uFF0C\u547D\u4E2D\u8BC4\u8BBA" : "\uFF0C\u6CA1\u7B49\u5230\u8BC4\u8BBA\u8BF7\u6C42"}`);
               if (got.length) {
                 commentBodies.push(...got);
                 readOk++;
