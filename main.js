@@ -1629,7 +1629,7 @@ var require_xiaohongshu = __commonJS({
           throw new Error("\u6CA1\u6709\u62E6\u622A\u5230\u4EFB\u4F55\u6536\u85CF\u6570\u636E\u2014\u2014\u767B\u5F55\u6001\u53EF\u80FD\u5DF2\u5931\u6548\u3002\u8BF7\u91CD\u65B0\u767B\u5F55\u540E\u91CD\u8BD5");
         }
         log(`[xhs] \u62E6\u622A\u5230 ${capturedBodies.length} \u4E2A\u54CD\u5E94\uFF0C\u53BB\u91CD\u540E ${items.length} \u6761`);
-        if (fetchComments !== false) {
+        if (fetchComments === true) {
           const commentBodies = [];
           let readOk = 0;
           const commentPlan = Math.min(items.length, COMMENTS_MAX_ITEMS);
@@ -1638,7 +1638,9 @@ var require_xiaohongshu = __commonJS({
             const it = items[i];
             log(`[xhs] \u8BC4\u8BBA\u91C7\u96C6\uFF1A\u7B2C ${i + 1}/${commentPlan} \u6761 ${it.id || ""}`);
             try {
-              await webviewHost.eval(`(function(){ location.href = ${JSON.stringify(it.url || "")}; return true; })()`);
+              await webviewHost.goto(it.url || "");
+              const injRes = await webviewHost.reinject("/api/sns/web/");
+              if (i === 0) log(`[xhs] \u8BC4\u8BBA\u8BCA\u65AD\uFF1A\u62E6\u622A\u5668\u8865\u88C5\u7ED3\u679C=${JSON.stringify(injRes)}`);
               const deadline = Date.now() + 12e3;
               let got = [];
               let scrollStep = 0;
@@ -1669,10 +1671,23 @@ var require_xiaohongshu = __commonJS({
                 title: document.title,
                 videos: document.querySelectorAll('video').length,
                 preloaded: !!window.__clipin_preloaded,
+                installed: !!window.__clipin_installed,
+                captured: (window.__clipin_captured || []).length,
               });
             })()`);
                 log(`[xhs] \u8BC4\u8BBA\u8BCA\u65AD\uFF1A\u9996\u6761\u8BE6\u60C5\u9875\u6355\u83B7 ${cap0.length} \u4E2A\u54CD\u5E94\uFF0C\u547D\u4E2D\u8BC4\u8BBA ${got.length} \u4E2A\uFF0CURL=${JSON.stringify(cap0.map((x) => x && x.url || "").slice(0, 12))}`);
                 log(`[xhs] \u8BC4\u8BBA\u8BCA\u65AD\uFF1A\u843D\u5730\u9875=${landed}`);
+                const shape = await webviewHost.eval(`(function(){
+              var cm = document.querySelector('.comments-container, .comments-el, [class*="comment"]');
+              return JSON.stringify({
+                scrollY: Math.round(window.scrollY),
+                docH: document.body ? document.body.scrollHeight : 0,
+                innerH: window.innerHeight,
+                hasCommentEl: !!cm,
+                commentCls: cm ? (cm.className || '').slice(0, 60) : '',
+              });
+            })()`);
+                log(`[xhs] \u8BC4\u8BBA\u8BCA\u65AD\uFF1A\u9875\u9762\u5F62\u6001=${shape}`);
               }
               await webviewHost.sleep(jitter(1200, 600));
             } catch (_) {
