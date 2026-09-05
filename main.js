@@ -1662,6 +1662,28 @@ var require_xiaohongshu = __commonJS({
               if (got.length) {
                 commentBodies.push(...got);
                 readOk++;
+              } else {
+                const dom = await readCommentsFromDom(webviewHost);
+                if (dom.items && dom.items.length) {
+                  commentBodies.push({
+                    // 走一样的挂载逻辑：URL 里带 note_id 才能反查归属
+                    url: `https://www.xiaohongshu.com/dom?note_id=${it.id || ""}`,
+                    body: {
+                      data: {
+                        comments: dom.items.map((c) => ({
+                          user_info: { nickname: c.author || "" },
+                          content: c.text || "",
+                          like_count: c.likes || 0
+                        }))
+                      }
+                    }
+                  });
+                  readOk++;
+                }
+                if (i === 0) {
+                  log(`[xhs] \u8BC4\u8BBA\u8BCA\u65AD\uFF1ADOM \u515C\u5E95 rootFound=${dom.rootFound} \u8BFB\u5230 ${(dom.items || []).length} \u6761`);
+                  log(`[xhs] \u8BC4\u8BBA\u8BCA\u65AD\uFF1A\u8BC4\u8BBA\u533A HTML \u7247\u6BB5=${JSON.stringify(dom.rootHtml || "")}`);
+                }
               }
               if (i === 0) {
                 const cap0 = await webviewHost.getCaptured() || [];
@@ -1738,6 +1760,46 @@ var require_xiaohongshu = __commonJS({
         });
       }
       return out;
+    }
+    async function readCommentsFromDom(webviewHost) {
+      const raw = await webviewHost.eval(`(function(){
+    function txt(el){ return ((el && (el.innerText || el.textContent)) || '').replace(/\\s+/g, ' ').trim(); }
+    var root = document.querySelector('.comments-el, .comments-container, [class*="comments-el"]');
+    var out = [];
+    if (root) {
+      var nodes = root.querySelectorAll('.comment-item, [class*="comment-item"], .parent-comment');
+      for (var i = 0; i < nodes.length && out.length < 20; i++) {
+        var n = nodes[i];
+        var nameEl = n.querySelector('.author-wrapper .name, .user-info .name, .author .name, [class*="author"] [class*="name"]');
+        var textEl = n.querySelector('.content .note-text, .note-text, .content, [class*="content"]');
+        var likeEl = n.querySelector('.like .count, .interactions .count, [class*="like"] [class*="count"]');
+        var t = txt(textEl), a = txt(nameEl);
+        if (!t) continue;
+        out.push({
+          author: a.slice(0, 40),
+          text: t.slice(0, 500),
+          likes: parseInt(txt(likeEl).replace(/[^0-9]/g, ''), 10) || 0,
+        });
+      }
+    }
+    return JSON.stringify({
+      rootFound: !!root,
+      nodeCount: root ? root.querySelectorAll('.comment-item, [class*="comment-item"], .parent-comment').length : 0,
+      items: out,
+      rootHtml: root ? String(root.innerHTML || '').slice(0, 1200) : '',
+    });
+  })()`);
+      try {
+        const j = JSON.parse(String(raw || "{}"));
+        return {
+          rootFound: !!j.rootFound,
+          nodeCount: j.nodeCount || 0,
+          items: Array.isArray(j.items) ? j.items : [],
+          rootHtml: j.rootHtml || ""
+        };
+      } catch (_) {
+        return { rootFound: false, nodeCount: 0, items: [], rootHtml: "" };
+      }
     }
     function extractComments(captured) {
       const body = captured && captured.body ? captured.body : captured;
@@ -1825,6 +1887,7 @@ var require_xiaohongshu = __commonJS({
     module2.exports.pickVideoUrl = pickVideoUrl;
     module2.exports.extractAlbums = extractAlbums;
     module2.exports.extractNotes = extractNotes;
+    module2.exports.readCommentsFromDom = readCommentsFromDom;
   }
 });
 
