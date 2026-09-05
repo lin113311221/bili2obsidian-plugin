@@ -1282,7 +1282,7 @@ var require_bilibili = __commonJS({
 var require_xiaohongshu = __commonJS({
   "core/providers/xiaohongshu.js"(exports2, module2) {
     var { makeItem, toISO } = require_model();
-    var COMMENTS_DISABLED = true;
+    var COMMENTS_MAX_ITEMS = 3;
     function jitter(base, spread) {
       return base + Math.floor(Math.random() * (spread + 1));
     }
@@ -1629,13 +1629,14 @@ var require_xiaohongshu = __commonJS({
           throw new Error("\u6CA1\u6709\u62E6\u622A\u5230\u4EFB\u4F55\u6536\u85CF\u6570\u636E\u2014\u2014\u767B\u5F55\u6001\u53EF\u80FD\u5DF2\u5931\u6548\u3002\u8BF7\u91CD\u65B0\u767B\u5F55\u540E\u91CD\u8BD5");
         }
         log(`[xhs] \u62E6\u622A\u5230 ${capturedBodies.length} \u4E2A\u54CD\u5E94\uFF0C\u53BB\u91CD\u540E ${items.length} \u6761`);
-        if (fetchComments !== false && COMMENTS_DISABLED) {
-          log("[xhs] \u8BC4\u8BBA\u91C7\u96C6\u5DF2\u505C\u7528\uFF08v0.5.62\uFF09\uFF1A\u9010\u6761\u8DF3\u8BE6\u60C5\u9875 + \u6EDA\u52A8\u4F1A\u5E26\u5D29\u6574\u4E2A Obsidian\uFF08\u771F\u673A\u5B9E\u8BC1\uFF09\uFF0C\u5F00\u5173\u4FDD\u7559\u4F46\u4E0D\u518D\u6267\u884C");
-        } else if (fetchComments !== false) {
+        if (fetchComments !== false) {
           const commentBodies = [];
           let readOk = 0;
-          for (let i = 0; i < items.length; i++) {
+          const commentPlan = Math.min(items.length, COMMENTS_MAX_ITEMS);
+          log(`[xhs] \u8BC4\u8BBA\u91C7\u96C6\uFF1A\u9650\u91CF\u8BD5\u8DD1\u524D ${commentPlan}/${items.length} \u6761\uFF08v0.5.63\u2014\u2014\u9A8C\u8BC1\u5355\u5C42\u7A97\u53E3\u4E0B\u6EDA\u8BE6\u60C5\u9875\u4F1A\u4E0D\u4F1A\u5D29\uFF09`);
+          for (let i = 0; i < commentPlan; i++) {
             const it = items[i];
+            log(`[xhs] \u8BC4\u8BBA\u91C7\u96C6\uFF1A\u7B2C ${i + 1}/${commentPlan} \u6761 ${it.id || ""}`);
             try {
               await webviewHost.eval(`(function(){ location.href = ${JSON.stringify(it.url || "")}; return true; })()`);
               const deadline = Date.now() + 12e3;
@@ -1677,8 +1678,8 @@ var require_xiaohongshu = __commonJS({
             } catch (_) {
             }
           }
-          log(`[xhs] \u8BC4\u8BBA\u91C7\u96C6\uFF1A${readOk}/${items.length} \u6761\u8BFB\u5230\u8BC4\u8BBA\uFF08\u62E6\u5230 ${commentBodies.length} \u4E2A\u54CD\u5E94\uFF09`);
-          if (items.length > 0 && readOk === 0) {
+          log(`[xhs] \u8BC4\u8BBA\u91C7\u96C6\uFF1A${readOk}/${commentPlan} \u6761\u8BFB\u5230\u8BC4\u8BBA\uFF08\u62E6\u5230 ${commentBodies.length} \u4E2A\u54CD\u5E94\uFF09`);
+          if (commentPlan > 0 && readOk === 0) {
             log("[xhs] \u26A0\uFE0F \u8BC4\u8BBA\u91C7\u96C6\u5931\u6548\uFF1A\u5F00\u4E86\u8BC4\u8BBA\u5F00\u5173\u4F46\u4E00\u6761\u90FD\u6CA1\u8BFB\u5230\u3002\u53EF\u80FD\u5C0F\u7EA2\u4E66\u6539\u7248\u5BFC\u81F4\u5F39\u5C42\u62E6\u622A\u5931\u6548\uFF0C\u8BF7\u628A sync.log \u53D1\u7ED9\u5F00\u53D1\u8005");
           }
           for (const body of commentBodies) {
@@ -5409,6 +5410,8 @@ var DEFAULT_SETTINGS = {
   fetchTranscript: false,
   fetchComments: false,
   // v0.5.49：评论采集开关（v0.5.34 的接线，回退时丢了，补回）
+  commentsOptIn: false,
+  // v0.5.63：评论采集风险确认——必须用户在设置页手动打开开关才置 true
   autoSync: false,
   syncIntervalMin: 60
 };
@@ -6409,6 +6412,43 @@ var ClipinPlugin = class extends Plugin {
       m.open();
     });
   }
+  /**
+   * v0.5.63：从设置页触发同步时的正确姿势。
+   *
+   * 设置页本身就是一个全屏 Modal，而同步要开「读取窗口」（BrowserModal）。
+   * 直接 syncOne = Modal 叠 Modal（双 modal-cover + 双背景模糊），webview 被
+   * 嵌进两层 GPU 合成链 —— 这正是 v0.5.60 给登录窗定位的崩溃根因。
+   * v0.5.61 修了登录窗，**同步按钮这条路径当时漏了**（11:05 那次崩很可能走
+   * 的就是这里，因为日志里没记入口，一直无法归因）。
+   *
+   * 做法和登录窗一致：先收起设置 → 同步（全程单层）→ 结束自动回到设置页。
+   */
+  async runSyncWithoutOverlay(platformId, opts) {
+    const st = this.app.setting;
+    const canReopen = !!(st && typeof st.open === "function" && typeof st.close === "function");
+    if (canReopen) {
+      try {
+        st.close();
+      } catch (_) {
+      }
+    }
+    await new Promise((r) => setTimeout(r, 150));
+    try {
+      await this.syncOne(platformId, { ...opts || {}, source: "\u8BBE\u7F6E\u9875" });
+    } finally {
+      if (canReopen) {
+        setTimeout(() => {
+          try {
+            const s2 = this.app.setting;
+            if (!s2) return;
+            if (typeof s2.open === "function") s2.open();
+            if (typeof s2.openTabById === "function") s2.openTabById("savault");
+          } catch (_) {
+          }
+        }, 220);
+      }
+    }
+  }
   async syncOne(platformId, opts) {
     const o = opts || {};
     const p = core.getProvider(platformId);
@@ -6435,7 +6475,7 @@ var ClipinPlugin = class extends Plugin {
       this._pauseBar.setText(this._syncPaused ? "\u25B6 \u7EE7\u7EED\u540C\u6B65" : "\u23F8 \u6682\u505C\u540C\u6B65");
       new Notice(this._syncPaused ? "\u5DF2\u6682\u505C\uFF08\u5F53\u524D\u8FD9\u6761\u4F1A\u8DD1\u5B8C\uFF09" : "\u7EE7\u7EED\u540C\u6B65");
     });
-    this._log("info", `\u5F00\u59CB\u540C\u6B65 ${p.name}\uFF08${platformId}\uFF09`);
+    this._log("info", `\u5F00\u59CB\u540C\u6B65 ${p.name}\uFF08${platformId}\uFF09\u5165\u53E3=${o.source || "ribbon/\u547D\u4EE4"}`);
     try {
       new Notice(`\u5F00\u59CB\u540C\u6B65 ${p.name}\u2026\uFF08\u5982\u5F39\u51FA\u6D4F\u89C8\u5668\u7A97\u53E3\uFF0C\u767B\u5F55\u540E\u70B9\u300C\u5F00\u59CB\u8BFB\u53D6\u300D\uFF09`);
       const isPro = !!this.settings.licenseValid;
@@ -6480,7 +6520,11 @@ var ClipinPlugin = class extends Plugin {
         quota: { max: FREE_QUOTA, used: this.settings.syncedCount || 0, isPro },
         enrich: {
           transcript: isPro && this.settings.fetchTranscript,
-          fetchComments: !!this.settings.fetchComments,
+          // v0.5.63：评论采集改为「双重开关」——fetchComments（用户意愿）
+          // && commentsOptIn（用户明确知道风险后手动打开）。升级上来的老用户
+          // fetchComments 可能是 true 但 optIn 是 false → 默认不跑，不会一开就崩。
+          // 想试的人在设置页打开开关（会看到警告）才会真的执行。
+          fetchComments: !!(this.settings.fetchComments && this.settings.commentsOptIn),
           asr: { apiKey: this.settings.dashscopeKey || "", model: "" },
           detail: true,
           ai: isPro && this.settings.ai.enabled ? { enabled: true, baseUrl: this.settings.ai.baseUrl, apiKey: this.settings.ai.key, model: this.settings.ai.model } : { enabled: false }
@@ -7217,14 +7261,14 @@ var ClipinSettingTab = class extends PluginSettingTab {
         new Setting(containerEl).setName("\u3000\u7ACB\u5373\u540C\u6B65").setDesc(`\u628A ${p.name} \u7684\u6536\u85CF\u540C\u6B65\u5230${s.target.type === "notion" ? " Notion" : " Obsidian"}\uFF08\u5F39\u7A97\u9009\uFF1A\u4EC5\u65B0\u589E / \u91CD\u65B0\u540C\u6B65\uFF09`).addButton((b) => b.setButtonText("\u4EC5\u540C\u6B65\u65B0\u589E").onClick(async () => {
           b.setButtonText("\u540C\u6B65\u4E2D\u2026").setDisabled(true);
           try {
-            await plugin.syncOne(id, { mode: "new" });
+            await plugin.runSyncWithoutOverlay(id, { mode: "new" });
           } finally {
             b.setButtonText("\u4EC5\u540C\u6B65\u65B0\u589E").setDisabled(false);
           }
         })).addButton((b) => b.setButtonText("\u91CD\u65B0\u540C\u6B65\uFF08\u8865\u8F6C\u5199/\u603B\u7ED3\uFF09").onClick(async () => {
           b.setButtonText("\u540C\u6B65\u4E2D\u2026").setDisabled(true);
           try {
-            await plugin.syncOne(id, { mode: "update" });
+            await plugin.runSyncWithoutOverlay(id, { mode: "update" });
           } finally {
             b.setButtonText("\u91CD\u65B0\u540C\u6B65\uFF08\u8865\u8F6C\u5199/\u603B\u7ED3\uFF09").setDisabled(false);
           }
@@ -7258,8 +7302,14 @@ var ClipinSettingTab = class extends PluginSettingTab {
       }).addButton((b) => b.setButtonText("\u83B7\u53D6 Key \u2197").onClick(() => {
         require("electron").shell.openExternal("https://bailian.console.aliyun.com/#/api-key");
       }));
-      new Setting(containerEl).setName("\u3000\u540C\u6B65\u8BC4\u8BBA\uFF08v0.5.62 \u8D77\u6682\u505C\uFF09").setDesc("\u26A0\uFE0F \u5DF2\u6682\u505C\uFF1A\u9010\u6761\u8DF3\u8BE6\u60C5\u9875\u518D\u6EDA\u52A8\u89E6\u53D1\u8BC4\u8BBA\u533A\uFF0C\u771F\u673A\u5B9E\u8BC1\u4F1A\u628A\u6574\u4E2A Obsidian \u5E26\u5D29\uFF08\u65E5\u5FD7\u621B\u7136\u800C\u6B62\u3001\u65E0\u5D29\u6E83\u4E8B\u4EF6 = GPU \u5408\u6210\u5C42\u5E26\u5D29\u4E3B\u8FDB\u7A0B\uFF09\u3002\u5F00\u5173\u4FDD\u7559\uFF0C\u7B49\u6362\u6210\u4E0D\u6EDA\u52A8\u7684\u65B9\u6848\u518D\u542F\u7528\uFF0C\u671F\u95F4\u4E0D\u4F1A\u5F71\u54CD\u6B63\u6587/\u8F6C\u5199/\u603B\u7ED3").addToggle((g) => g.setValue(!!s.fetchComments).onChange(async (v) => {
+      new Setting(containerEl).setName("\u3000\u540C\u6B65\u8BC4\u8BBA\uFF08\u5B9E\u9A8C\xB7\u9ED8\u8BA4\u5173\uFF09").setDesc("\u8BFB\u6BCF\u6761\u7B14\u8BB0\u7684\u7F6E\u9876/\u70ED\u8BC4\u5230\u300C\u7CBE\u9009\u8BC4\u8BBA\u300D\u533A\u5757\u3002\u26A0\uFE0F \u8FD9\u6761\u94FE\u8DEF\u8981\u9010\u6761\u8DF3\u8FDB\u8BE6\u60C5\u9875\u5E76\u6EDA\u52A8\u9875\u9762\u89E6\u53D1\u8BC4\u8BBA\u52A0\u8F7D\uFF0C\u5386\u53F2\u4E0A\u628A\u6574\u4E2A Obsidian \u5E26\u5D29\u8FC7\uFF08Windows \u4E0A\u8FDB\u7A0B\u76F4\u63A5\u6D88\u5931\u3001\u65E5\u5FD7\u621B\u7136\u800C\u6B62\uFF09\u3002\u60F3\u8BD5\u8BF7\u4ECE\u5DE6\u4FA7\u300C\u526A\u5200\u300D\u6309\u94AE\u540C\u6B65\uFF08\u5355\u5C42\u7A97\u53E3\uFF09\uFF0C\u4E0D\u8981\u4ECE\u8BBE\u7F6E\u9875\u70B9\u540C\u6B65\uFF1B\u5D29\u4E86\u5C31\u91CD\u542F\u56DE\u6765\u5173\u6389\u5B83").addToggle((g) => g.setValue(!!s.fetchComments).onChange(async (v) => {
         s.fetchComments = v;
+        if (v) {
+          s.commentsOptIn = true;
+          new Notice("\u8BC4\u8BBA\u91C7\u96C6\u5DF2\u5F00\u542F\uFF1A\u5EFA\u8BAE\u4ECE\u5DE6\u4FA7\u526A\u5200\u6309\u94AE\u540C\u6B65\uFF08\u5355\u5C42\u7A97\u53E3\uFF09\u3002\u82E5 Obsidian \u76F4\u63A5\u5D29\u6E83\uFF0C\u91CD\u542F\u540E\u56DE\u6765\u628A\u8FD9\u4E2A\u5F00\u5173\u5173\u6389\u5373\u53EF", 12e3);
+        } else {
+          s.commentsOptIn = false;
+        }
         await plugin.saveSettings();
       }));
     }
