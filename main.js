@@ -1065,7 +1065,12 @@ var require_bilibili = __commonJS({
       id: "bilibili",
       name: "\u54D4\u54E9\u54D4\u54E9",
       emoji: "\u{1F4FA}",
-      status: "stable",
+      // v0.5.68：从 'stable' 降为 'beta' —— 标注要与真实验证程度一致。
+      // 小红书才是天天在真机上跑、有完整回归日志的那个（列表采集/评论/转写/总结
+      // 全链路验证过）；B 站这边只有接口直连的基础实现，**没有真机跑通过的证据**，
+      // 作者自己也没配过账号。新人进来默认看到「B站=稳定」会直接踩空。
+      status: "beta",
+      warning: "B \u7AD9\u94FE\u8DEF\u5C1A\u672A\u7ECF\u8FC7\u5B8C\u6574\u771F\u673A\u9A8C\u8BC1\uFF08\u4F5C\u8005\u81EA\u5DF1\u90FD\u6CA1\u914D\u8FC7\u8D26\u53F7\uFF09\u3002\u80FD\u8DD1\u901A\u6700\u597D\uFF0C\u8DD1\u4E0D\u901A\u8BF7\u628A sync.log \u53D1\u7ED9\u5F00\u53D1\u8005\uFF1B\u4E3B\u529B\u540C\u6B65\u5EFA\u8BAE\u5148\u7528\u5C0F\u7EA2\u4E66",
       /** 取数方式：直连接口（B 站无签名要求，带 Cookie 即可） */
       mode: "api",
       /** 登录方式：cookie（webview 可自动提取） */
@@ -1332,7 +1337,11 @@ var require_xiaohongshu = __commonJS({
       id: "xiaohongshu",
       name: "\u5C0F\u7EA2\u4E66",
       emoji: "\u{1F4D5}",
-      status: "beta",
+      // v0.5.68：从 'beta' 升为 'stable' —— 这是四个平台里唯一**全链路真机跑通**
+      // 的（列表采集 → 详情 → 评论 → 转写 → AI 总结，每天真机 35 条无崩溃），
+      // 崩溃史（Modal 叠层 / preload 跨跳页）也都已定位修完并有回归测试盯着。
+      // 新人默认应该落到这个平台上，标注不能再写「测试版」吓退人。
+      status: "stable",
       mode: "webview",
       authType: "cookie",
       authFields: [
@@ -5474,15 +5483,19 @@ var qrcode = require_qrcode2();
 var FREE_QUOTA = 50;
 var CHAT_VIEW_TYPE = "knowledge-bridge-chat-view";
 var CHAT_INDEX_TTL_MS = 5 * 60 * 1e3;
-var PLATFORM_ORDER = ["bilibili", "xiaohongshu", "xiaoyuzhou", "twitter"];
+var PLATFORM_ORDER = ["xiaohongshu", "bilibili", "xiaoyuzhou", "twitter"];
 var DEFAULT_SETTINGS = {
   version: 2,
   licenseKey: "",
   licenseValid: false,
   syncedCount: 0,
   platforms: {
-    bilibili: { enabled: true, auth: { sessdata: "" }, collections: [], userLabel: "" },
-    xiaohongshu: { enabled: false, auth: { cookie: "", userId: "" }, collections: [], userLabel: "" },
+    // v0.5.68：默认只开小红书（唯一真机验证过的），B 站默认关——
+    // 以前默认开 B 站，新人装完点剪刀就直接去跑一条没人验证过的链路。
+    // 注意：这里只影响**全新安装**。老用户 data.json 里已存的值不会被覆盖
+    // （loadSettings 是 { ...DEFAULT, ...loaded } 浅合并）。
+    bilibili: { enabled: false, auth: { sessdata: "" }, collections: [], userLabel: "" },
+    xiaohongshu: { enabled: true, auth: { cookie: "", userId: "" }, collections: [], userLabel: "" },
     xiaoyuzhou: { enabled: false, auth: { refreshToken: "", deviceId: "" }, collections: [], userLabel: "" },
     twitter: { enabled: false, auth: { cookie: "" }, collections: [], userLabel: "" }
   },
@@ -6756,6 +6769,11 @@ var ClipinPlugin = class extends Plugin {
     }
   }
   /** 同步所有已启用的平台 */
+  /** 平台是否已有登录态（设置页卡片和同步前判定共用，别两处各写一套） */
+  _isPlatformLoggedIn(platformId) {
+    const cfg = this.settings.platforms[platformId];
+    return !!cfg && Object.values(cfg.auth || {}).some((v) => !!v);
+  }
   async syncAll(opts) {
     const o = opts || {};
     const ids = PLATFORM_ORDER.filter((id) => this.settings.platforms[id] && this.settings.platforms[id].enabled);
@@ -6763,8 +6781,10 @@ var ClipinPlugin = class extends Plugin {
       new Notice("\u8BF7\u5148\u5728\u8BBE\u7F6E\u91CC\u542F\u7528\u81F3\u5C11\u4E00\u4E2A\u5E73\u53F0");
       return;
     }
+    for (const id of ids) await this._refreshAuthFromPartition(id);
+    const anyLoggedIn = ids.some((id) => this._isPlatformLoggedIn(id));
     let mode;
-    if (o.askMode) {
+    if (o.askMode && anyLoggedIn) {
       mode = await this._chooseSyncMode("\u7ED9\u5DF2\u6709\u7B14\u8BB0\u8865\u8F6C\u5199 / \u603B\u7ED3");
       if (!mode) {
         new Notice("\u5DF2\u53D6\u6D88");
@@ -7388,12 +7408,16 @@ var ClipinSettingTab = class extends PluginSettingTab {
       }));
     }
     containerEl.createEl("h2", { text: "\u540C\u6B65\u54EA\u4E9B\u5E73\u53F0" });
+    containerEl.createEl("p", {
+      text: "\u9ED8\u8BA4\u53EA\u5F00\u5C0F\u7EA2\u4E66\uFF1A\u5B83\u662F\u76EE\u524D\u552F\u4E00\u5168\u94FE\u8DEF\u771F\u673A\u8DD1\u901A\u7684\u5E73\u53F0\uFF08\u5217\u8868 \u2192 \u8BE6\u60C5 \u2192 \u8BC4\u8BBA \u2192 \u8F6C\u5199 \u2192 \u603B\u7ED3\uFF09\u3002B \u7AD9\u3001\u5C0F\u5B87\u5B99\u3001X \u7684\u6807\u6CE8\u89C1\u5404\u81EA\u5361\u7247\uFF0C\u672A\u5B8C\u6210\u7684\u9ED8\u8BA4\u5173\u95ED\u3002",
+      cls: "clipin-tip"
+    });
     for (const id of PLATFORM_ORDER) {
       const p = core.getProvider(id);
       if (!p) continue;
       const cfg = s.platforms[id];
       const statusTag = { stable: "\u7A33\u5B9A", beta: "\u6D4B\u8BD5\u7248", experimental: "\u5B9E\u9A8C\u6027" }[p.status] || "";
-      const loggedIn = Object.values(cfg.auth || {}).some((v) => !!v);
+      const loggedIn = plugin._isPlatformLoggedIn(id);
       new Setting(containerEl).setName(`${p.emoji} ${p.name}`).setDesc([
         statusTag ? `\u3010${statusTag}\u3011` : "",
         cfg.enabled ? loggedIn ? "\u5DF2\u542F\u7528\u5E76\u767B\u5F55" : "\u5DF2\u542F\u7528\uFF0C\u4F46\u672A\u767B\u5F55" : "\u672A\u542F\u7528",
