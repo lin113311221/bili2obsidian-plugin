@@ -1559,6 +1559,21 @@ var require_xiaohongshu = __commonJS({
           // 2) 打开个人主页
           async navigate() {
             await webviewHost.goto(profileUrl, { waitUntil: "dom-ready", timeoutMs: 3e4 });
+            const tabReady = await webviewHost.eval(`(function(){
+          var els = document.querySelectorAll('.reds-tab, .feeds-tab, [class*="tab-item"]');
+          var hit = Array.prototype.some.call(els, function (e) { return (e.textContent || '').includes('\u6536\u85CF'); });
+          return hit;
+        })()`);
+            if (!tabReady) {
+              await webviewHost.sleep(3e3);
+              const tabReady2 = await webviewHost.eval(`(function(){
+            var els = document.querySelectorAll('.reds-tab, .feeds-tab, [class*="tab-item"]');
+            return Array.prototype.some.call(els, function (e) { return (e.textContent || '').includes('\u6536\u85CF'); });
+          })()`);
+              if (!tabReady2) {
+                throw new Error("\u6CA1\u627E\u5230\u300C\u6536\u85CF\u300D\u6807\u7B7E\u2014\u2014\u9875\u9762\u6CA1\u5728 3 \u79D2\u5185\u6E32\u67D3\u51FA\u6807\u7B7E\u3002\u53EF\u80FD\u7F51\u7EDC\u6162\u6216\u9875\u9762\u6539\u7248\uFF0C\u53EF\u91CD\u8BD5\u4E00\u6B21");
+              }
+            }
             const favClicked = await webviewHost.clickByText({ selector: '.reds-tab, .feeds-tab, [class*="tab-item"]', text: "\u6536\u85CF" });
             if (!favClicked) {
               throw new Error("\u6CA1\u627E\u5230\u300C\u6536\u85CF\u300D\u6807\u7B7E\u2014\u2014\u53EF\u80FD\u767B\u5F55\u6001\u5DF2\u5931\u6548\u6216\u9875\u9762\u6539\u7248\u3002\u8BF7\u91CD\u65B0\u767B\u5F55\u540E\u91CD\u8BD5");
@@ -7127,7 +7142,14 @@ var ClipinSettingTab = class extends PluginSettingTab {
             if (typeof b.setTooltip === "function" && p.qrLogin) {
               b.setTooltip("\u7528\u5185\u5D4C\u6D4F\u89C8\u5668\u6253\u5F00\u767B\u5F55\u9875\u3002\u5C11\u6570 Windows \u673A\u5668\u4F1A\u51FA\u73B0\u6574\u4E2A Obsidian \u5D29\u6E83\uFF0C\u4F18\u5148\u7528\u300C\u626B\u7801\u767B\u5F55\u300D");
             }
-            b.onClick(() => new LoginModal(this.app, plugin, p, id === "bilibili" ? "SESSDATA" : null).open());
+            b.onClick(() => {
+              try {
+                const setting = this.app.setting;
+                if (setting && typeof setting.close === "function") setting.close();
+              } catch (_) {
+              }
+              setTimeout(() => new LoginModal(this.app, plugin, p, id === "bilibili" ? "SESSDATA" : null).open(), 150);
+            });
           }).addButton((b) => b.setButtonText("\u7CFB\u7EDF\u6D4F\u89C8\u5668").setTooltip("\u7528\u7CFB\u7EDF\u9ED8\u8BA4\u6D4F\u89C8\u5668\u6253\u5F00\u767B\u5F55\u9875\u3002\u767B\u5F55\u540E\u6309 F12 \u2192 Console \u7C98\u8D34 document.cookie \u590D\u5236\uFF0C\u518D\u586B\u5230\u4E0B\u65B9 Cookie \u6846\u91CC").onClick(() => {
             try {
               require("electron").shell.openExternal(p.capabilities.loginUrl);
