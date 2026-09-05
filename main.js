@@ -1282,6 +1282,7 @@ var require_bilibili = __commonJS({
 var require_xiaohongshu = __commonJS({
   "core/providers/xiaohongshu.js"(exports2, module2) {
     var { makeItem, toISO } = require_model();
+    var COMMENTS_DISABLED = true;
     function jitter(base, spread) {
       return base + Math.floor(Math.random() * (spread + 1));
     }
@@ -1628,7 +1629,9 @@ var require_xiaohongshu = __commonJS({
           throw new Error("\u6CA1\u6709\u62E6\u622A\u5230\u4EFB\u4F55\u6536\u85CF\u6570\u636E\u2014\u2014\u767B\u5F55\u6001\u53EF\u80FD\u5DF2\u5931\u6548\u3002\u8BF7\u91CD\u65B0\u767B\u5F55\u540E\u91CD\u8BD5");
         }
         log(`[xhs] \u62E6\u622A\u5230 ${capturedBodies.length} \u4E2A\u54CD\u5E94\uFF0C\u53BB\u91CD\u540E ${items.length} \u6761`);
-        if (fetchComments !== false) {
+        if (fetchComments !== false && COMMENTS_DISABLED) {
+          log("[xhs] \u8BC4\u8BBA\u91C7\u96C6\u5DF2\u505C\u7528\uFF08v0.5.62\uFF09\uFF1A\u9010\u6761\u8DF3\u8BE6\u60C5\u9875 + \u6EDA\u52A8\u4F1A\u5E26\u5D29\u6574\u4E2A Obsidian\uFF08\u771F\u673A\u5B9E\u8BC1\uFF09\uFF0C\u5F00\u5173\u4FDD\u7559\u4F46\u4E0D\u518D\u6267\u884C");
+        } else if (fetchComments !== false) {
           const commentBodies = [];
           let readOk = 0;
           for (let i = 0; i < items.length; i++) {
@@ -7148,7 +7151,27 @@ var ClipinSettingTab = class extends PluginSettingTab {
                 if (setting && typeof setting.close === "function") setting.close();
               } catch (_) {
               }
-              setTimeout(() => new LoginModal(this.app, plugin, p, id === "bilibili" ? "SESSDATA" : null).open(), 150);
+              setTimeout(() => {
+                const lm = new LoginModal(this.app, plugin, p, id === "bilibili" ? "SESSDATA" : null);
+                const origClose = lm.close.bind(lm);
+                let back = false;
+                lm.close = () => {
+                  origClose();
+                  if (back) return;
+                  back = true;
+                  setTimeout(() => {
+                    try {
+                      const setting = this.app.setting;
+                      if (!setting) return;
+                      if (typeof setting.open === "function") setting.open();
+                      if (typeof setting.openTabById === "function") setting.openTabById("savault");
+                      if (typeof this.display === "function") this.display();
+                    } catch (_) {
+                    }
+                  }, 220);
+                };
+                lm.open();
+              }, 150);
             });
           }).addButton((b) => b.setButtonText("\u7CFB\u7EDF\u6D4F\u89C8\u5668").setTooltip("\u7528\u7CFB\u7EDF\u9ED8\u8BA4\u6D4F\u89C8\u5668\u6253\u5F00\u767B\u5F55\u9875\u3002\u767B\u5F55\u540E\u6309 F12 \u2192 Console \u7C98\u8D34 document.cookie \u590D\u5236\uFF0C\u518D\u586B\u5230\u4E0B\u65B9 Cookie \u6846\u91CC").onClick(() => {
             try {
@@ -7235,7 +7258,7 @@ var ClipinSettingTab = class extends PluginSettingTab {
       }).addButton((b) => b.setButtonText("\u83B7\u53D6 Key \u2197").onClick(() => {
         require("electron").shell.openExternal("https://bailian.console.aliyun.com/#/api-key");
       }));
-      new Setting(containerEl).setName("\u3000\u540C\u6B65\u8BC4\u8BBA").setDesc("\u5728\u4E13\u8F91\u91C7\u96C6\u65F6\u9010\u6761\u70B9\u5F00\u7B14\u8BB0\u8BFB\u8BC4\u8BBA\u533A\uFF08\u7F6E\u9876/\u70ED\u8BC4\u524D 5 \u6761\uFF09\u3002\u26A0\uFE0F \u5B9E\u9A8C\u529F\u80FD\uFF1A\u5F39\u5C42\u62E6\u622A\u94FE\u8DEF\u8F83\u957F\uFF0C\u5C0F\u7EA2\u4E66\u6539\u7248\u540E\u53EF\u80FD\u5931\u6548\uFF1B\u5931\u6548\u65F6\u5F39\u5C42\u4F1A\u6253\u5F00\u4F46\u8BFB\u4E0D\u5230\u8BC4\u8BBA\uFF0C\u53EF\u628A sync.log \u53D1\u7ED9\u5F00\u53D1\u8005").addToggle((g) => g.setValue(!!s.fetchComments).onChange(async (v) => {
+      new Setting(containerEl).setName("\u3000\u540C\u6B65\u8BC4\u8BBA\uFF08v0.5.62 \u8D77\u6682\u505C\uFF09").setDesc("\u26A0\uFE0F \u5DF2\u6682\u505C\uFF1A\u9010\u6761\u8DF3\u8BE6\u60C5\u9875\u518D\u6EDA\u52A8\u89E6\u53D1\u8BC4\u8BBA\u533A\uFF0C\u771F\u673A\u5B9E\u8BC1\u4F1A\u628A\u6574\u4E2A Obsidian \u5E26\u5D29\uFF08\u65E5\u5FD7\u621B\u7136\u800C\u6B62\u3001\u65E0\u5D29\u6E83\u4E8B\u4EF6 = GPU \u5408\u6210\u5C42\u5E26\u5D29\u4E3B\u8FDB\u7A0B\uFF09\u3002\u5F00\u5173\u4FDD\u7559\uFF0C\u7B49\u6362\u6210\u4E0D\u6EDA\u52A8\u7684\u65B9\u6848\u518D\u542F\u7528\uFF0C\u671F\u95F4\u4E0D\u4F1A\u5F71\u54CD\u6B63\u6587/\u8F6C\u5199/\u603B\u7ED3").addToggle((g) => g.setValue(!!s.fetchComments).onChange(async (v) => {
         s.fetchComments = v;
         await plugin.saveSettings();
       }));
